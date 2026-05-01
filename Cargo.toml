@@ -1,0 +1,15 @@
+[package]
+name = "ltr-sufrage"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ltr-sufrage"
+path = "src/main.rs"
+
+[dependencies]
+libsufr = { path = "../sufr/libsufr" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rayon = "1"
+serde = "1"
