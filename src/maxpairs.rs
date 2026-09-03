@@ -237,17 +237,22 @@ fn process_branch(
 /// For each repeat found, `callback(pos1, pos2, len)` is called with
 /// `pos1 < pos2`.
 ///
+/// Both arrays are consumed once, in order, so they are taken as iterators
+/// (typically `stream::ArrayReader`s over the `.sufr` file) rather than
+/// slices; nothing beyond a small read buffer is held in memory.
+///
 /// # Arguments
-/// * `sa`           — suffix array (length `num_suffixes`)
-/// * `lcp`          — LCP array (length `num_suffixes`, `lcp[0]` = 0)
+/// * `sa`           — suffix array values, in SA order (`num_suffixes` of them)
+/// * `lcp`          — LCP values in the same order, `lcp[i]` = LCP(sa[i-1], sa[i]),
+///                    `lcp[0]` = 0
 /// * `text`         — original text bytes
 /// * `num_suffixes` — number of valid suffixes (may be < text.len() when
 ///                    non-ACGT positions are excluded)
 /// * `min_len`      — minimum repeat length
 /// * `callback`     — called for each maximal repeat `(pos1, pos2, len)`
 pub fn enumerate_maximal_repeats(
-    sa: &[usize],
-    lcp: &[usize],
+    mut sa: impl Iterator<Item = usize>,
+    mut lcp: impl Iterator<Item = usize>,
     text: &[u8],
     num_suffixes: usize,
     min_len: usize,
@@ -256,6 +261,8 @@ pub fn enumerate_maximal_repeats(
     if num_suffixes == 0 {
         return;
     }
+    // lcp[0] is never used: the traversal reads lcp[idx + 1] at step idx.
+    lcp.next();
 
     // Stack entries: (lcp_depth, left_boundary, node_info)
     let mut s_lcp: Vec<usize> = vec![0];
@@ -268,12 +275,13 @@ pub fn enumerate_maximal_repeats(
     let mut first_from_root = true;
 
     for idx in 0..num_suffixes {
-        let cur_sa = sa[idx];
+        let cur_sa = sa.next().expect("suffix array shorter than num_suffixes");
         // The C ESA bottom-up traversal (SAIN path) uses a look-ahead LCP:
         // at step idx, lcpvalue = LCP(sa[idx], sa[idx+1]).
         // Sufr stores the standard look-back LCP: lcp[i] = LCP(sa[i-1], sa[i]).
-        // Shift by one so each suffix is placed at the correct node depth.
-        let cur_lcp = if idx + 1 < num_suffixes { lcp[idx + 1] } else { 0 };
+        // Shift by one so each suffix is placed at the correct node depth;
+        // past the last suffix the look-ahead value is 0.
+        let cur_lcp = if idx + 1 < num_suffixes { lcp.next().unwrap_or(0) } else { 0 };
 
         // ---- Part 1: add current suffix as leaf to current top, if depth matches ----
         let top_lcp = *s_lcp.last().unwrap();

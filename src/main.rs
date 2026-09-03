@@ -9,6 +9,7 @@ use rayon::prelude::*;
 
 mod ltr;
 mod maxpairs;
+mod stream;
 mod tsd;
 mod xdrop;
 
@@ -22,7 +23,7 @@ enum OutputFormat {
 // --------------------------------------------------
 #[derive(Parser, Debug)]
 #[command(
-    name = "ltr-sufrage",
+    name = "ltr-forage",
     about = "Identify LTR retrotransposon candidates using a sufr suffix array index",
     allow_negative_numbers = true,
 )]
@@ -187,14 +188,17 @@ where
     }
     // threads == 0: leave Rayon at its default (all logical CPUs, or RAYON_NUM_THREADS)
 
+    // Loads the text (needed for random access throughout); the suffix array
+    // and LCP array stay on disk and are streamed once in phase 1.
+    let t_start = std::time::Instant::now();
     let mut sf: SufrFile<T> = SufrFile::read(&args.sufr, false)?;
 
-    let sa: Vec<usize> = sf.suffix_array_file.iter().map(|v| v.to_usize()).collect();
-    let lcp: Vec<usize> = sf.lcp_file.iter().map(|v| v.to_usize()).collect();
-    let text = sf.text.clone();
+    let text = std::mem::take(&mut sf.text);
     let num_suffixes = sf.len_suffixes.to_usize();
     let seq_starts: Vec<usize> = sf.sequence_starts.iter().map(|v| v.to_usize()).collect();
-    let seq_names = sf.sequence_names.clone();
+    let width = std::mem::size_of::<T>();
+    let sa_pos = sf.suffix_array_pos as u64;
+    let lcp_pos = sf.lcp_pos as u64;
 
     eprintln!(
         "Index: {} sequence(s), {} suffixes, text length {}",
@@ -202,6 +206,7 @@ where
         num_suffixes,
         sf.text_len.to_usize(),
     );
+    eprintln!("Loaded text in {:.1}s", t_start.elapsed().as_secs_f64());
     eprintln!(
         "Parameters: min_seed={} ltr=[{},{}] dist=[{},{}] similar={:.0}% xdrop={}",
         args.min_seed,
@@ -222,30 +227,50 @@ where
     };
 
     // ---- Phase 1: collect seeds ----
+    // The suffix array is cut at positions whose LCP is below the seed length
+    // (see stream::split_points); each piece is traversed by its own worker,
+    // streaming its slice of the SA and LCP arrays from the file.  Seeds are
+    // concatenated in piece order, which is the order a single sequential
+    // traversal would emit them, so later tie-breaks are unaffected.
+    let n_pieces = rayon::current_num_threads() * 4;
+    let pieces = stream::split_points(&args.sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
+    let per_piece: Vec<Result<Vec<ltr::Seed>>> = pieces
+        .par_iter()
+        .map(|&(start, end)| {
+            let n = end - start;
+            let sa = stream::ArrayReader::open(&args.sufr, sa_pos + (start * width) as u64, n, width)?;
+            let lcp = stream::ArrayReader::open(&args.sufr, lcp_pos + (start * width) as u64, n, width)?;
+            let mut seeds: Vec<ltr::Seed> = Vec::new();
+            maxpairs::enumerate_maximal_repeats(
+                sa,
+                lcp,
+                &text,
+                n,
+                args.min_seed,
+                &mut |pos1, pos2, len| {
+                    if let Some(seed) = ltr::filter_seed(
+                        pos1, pos2, len,
+                        args.ltr_min, args.ltr_max,
+                        args.dist_min, args.dist_max,
+                        &seq_starts,
+                    ) {
+                        seeds.push(seed);
+                    }
+                },
+            );
+            Ok(seeds)
+        })
+        .collect();
     let mut seeds: Vec<ltr::Seed> = Vec::new();
-    maxpairs::enumerate_maximal_repeats(
-        &sa,
-        &lcp,
-        &text,
-        num_suffixes,
-        args.min_seed,
-        &mut |pos1, pos2, len| {
-            if let Some(seed) = ltr::filter_seed(
-                pos1, pos2, len,
-                args.ltr_min, args.ltr_max,
-                args.dist_min, args.dist_max,
-                &seq_starts,
-            ) {
-                seeds.push(seed);
-            }
-        },
-    );
-    eprintln!("Phase 1: {} seed pair(s) found", seeds.len());
-    // ---- Phase 2 + TSD: extend seeds, annotate TSD, compute post-TSD similarity ----
-    // GT runs TSD annotation per-seed inside gt_searchforLTRs, before the results are
-    // collected into the arrayLTRboundaries.  The sort and dedup that follow therefore
-    // operate on POST-TSD outer boundaries.  We mirror that by annotating TSD
-    // immediately after extension, before collecting into the candidate pool.
+    for piece in per_piece {
+        seeds.extend(piece?);
+    }
+    eprintln!("Phase 1: {} seed pair(s) found ({} piece(s), {:.1}s elapsed)", seeds.len(), pieces.len(), t_start.elapsed().as_secs_f64());
+    // ---- Phase 2: extend, TSD/motif, constraints, similarity (GT's order) ----
+    // GT runs these per seed inside gt_searchforLTRs: x-drop extension, then the
+    // TSD/motif search (which moves the outer boundaries), then the length and
+    // distance check on the moved boundaries, then the edit distance.  The sort
+    // and dedup that follow operate on the post-TSD outer boundaries.
     let motif_cfg = tsd::MotifConfig {
         firstleft:          b'T',
         secondleft:         b'G',
@@ -267,20 +292,36 @@ where
         .par_iter()
         .enumerate()
         .filter_map(|(seed_idx, seed)| {
-            let mut cand = ltr::extend_seed(
-                seed, &text, &seq_starts,
-                args.ltr_min, args.ltr_max,
-                args.dist_min, args.dist_max,
-                &scores,
-            )?;
+            let mut cand = ltr::extend_seed(seed, &text, &seq_starts, args.ltr_max, &scores);
 
+            // GT (gt_searchforLTRs): when TSD and/or motif search is on, a
+            // candidate survives only if a TSD was found (and the motifs, when
+            // requested), or, with TSD search off, if both motifs were found.
             let ti = tsd::annotate_tsd_and_motif(
                 &cand, &text, &seq_starts,
                 args.mintsd, args.maxtsd, args.vicinity,
                 &motif_cfg, args.motif, args.tiered_tsd,
             );
+            if args.mintsd >= 2 || args.motif {
+                let full_with_tsd = ti.has_tsd
+                    && (!args.motif || (ti.motif_near_tsd && ti.motif_far_tsd));
+                let full_motif_only = args.mintsd < 2
+                    && ti.motif_near_tsd && ti.motif_far_tsd;
+                if !full_with_tsd && !full_motif_only {
+                    return None;
+                }
+            }
 
-            // Compute post-TSD similarity and apply threshold (GT does this per-seed).
+            // Length and distance constraints on the adjusted boundaries.
+            if !ltr::constraints_ok(
+                ti.left_ltr_start, ti.left_ltr_end,
+                ti.right_ltr_start, ti.right_ltr_end,
+                args.ltr_min, args.ltr_max, args.dist_min, args.dist_max,
+            ) {
+                return None;
+            }
+
+            // Similarity on the adjusted boundaries, then the threshold.
             let llen = ti.left_ltr_end  - ti.left_ltr_start  + 1;
             let rlen = ti.right_ltr_end - ti.right_ltr_start + 1;
             let edist = ltr::unit_edit_distance(
@@ -300,7 +341,7 @@ where
             Some((seed_idx, cand, ti))
         })
         .collect();
-    eprintln!("Phase 2: {} candidate(s) after extension + TSD + similarity filter", paired.len());
+    eprintln!("Phase 2: {} candidate(s) after extension + TSD + similarity filter ({:.1}s elapsed)", paired.len(), t_start.elapsed().as_secs_f64());
 
     // ---- Phase 3a: remove duplicate predictions ----
     // Sort by (seq_num, post-TSD left_ltr_start, post-TSD right_ltr_end, seed_idx).
@@ -345,10 +386,11 @@ where
         .collect();
 
     eprintln!(
-        "Phase 4: {} candidate(s) with TSD, {} with outer motif, {} with inner motif",
+        "Phase 4: {} candidate(s) with TSD, {} with outer motif, {} with inner motif ({:.1}s elapsed)",
         surviving.iter().filter(|(_, t)| t.has_tsd).count(),
         surviving.iter().filter(|(_, t)| t.motif_near_tsd).count(),
         surviving.iter().filter(|(_, t)| t.motif_far_tsd).count(),
+        t_start.elapsed().as_secs_f64(),
     );
 
     // ---- Output ----

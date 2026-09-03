@@ -1,10 +1,10 @@
 [package]
-name = "ltr-sufrage"
+name = "ltr-forage"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "ltr-sufrage"
+name = "ltr-forage"
 path = "src/main.rs"
 
 [dependencies]

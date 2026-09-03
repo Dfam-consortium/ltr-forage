@@ -1,8 +1,9 @@
 /// LTR candidate seed filtering and X-drop extension into full LTR predictions.
 ///
 /// Phase 1 (filter_seed): select maximal repeats that could be LTR seeds.
-/// Phase 2 (extend_seed): X-drop extend each seed to find full LTR boundaries,
-///   then compute similarity and apply the similarity threshold.
+/// Phase 2 (extend_seed): X-drop extend each seed to find full LTR boundaries.
+///   Length, distance and similarity filters run in main.rs after the TSD
+///   search, matching GenomeTools' order.
 
 use crate::xdrop::{XdropScores, xdrop_extend};
 
@@ -156,25 +157,43 @@ pub fn unit_edit_distance(u: &[u8], v: &[u8]) -> usize {
 }
 
 // --------------------------------------------------
-/// Extend a seed with X-drop alignment.
-///
-/// Returns `None` if:
-///   - The extended LTR length falls outside `[lmin, lmax]`
-///   - The post-extension LTR distance (right_ltr_start - left_ltr_start) is outside `[dmin, dmax]`
-///
-/// Otherwise returns `Some(LtrCandidate)` with the full LTR boundaries.
-/// Similarity is stored as a pre-TSD estimate; the caller must recompute it
-/// on TSD-adjusted boundaries and apply the similarity threshold there.
-pub fn extend_seed(
-    seed: &Seed,
-    text: &[u8],
-    sequence_starts: &[usize],
+/// GenomeTools' `checklengthanddistanceconstraints`, applied to a set of
+/// LTR boundaries.  Called after TSD/motif adjustment, as GT does, because
+/// the TSD search can move the outer boundaries by up to `vicinity` bp.
+pub fn constraints_ok(
+    left_ltr_start: usize,
+    left_ltr_end: usize,
+    right_ltr_start: usize,
+    right_ltr_end: usize,
     lmin: usize,
     lmax: usize,
     dmin: usize,
     dmax: usize,
+) -> bool {
+    if left_ltr_end >= right_ltr_start {
+        return false;
+    }
+    let ulen = left_ltr_end - left_ltr_start + 1;
+    let vlen = right_ltr_end - right_ltr_start + 1;
+    let dist = right_ltr_start - left_ltr_start;
+    ulen >= lmin && ulen <= lmax && vlen >= lmin && vlen <= lmax && dist >= dmin && dist <= dmax
+}
+
+// --------------------------------------------------
+/// Extend a seed with X-drop alignment in both directions and return the
+/// resulting LTR boundaries.
+///
+/// No length, distance or similarity filtering happens here.  GT applies
+/// those after the TSD search has adjusted the outer boundaries, so the
+/// caller runs `constraints_ok` and the similarity computation on the
+/// post-TSD boundaries.  `similarity` is left at 0.0.
+pub fn extend_seed(
+    seed: &Seed,
+    text: &[u8],
+    sequence_starts: &[usize],
+    lmax: usize,
     scores: &XdropScores,
-) -> Option<LtrCandidate> {
+) -> LtrCandidate {
     // Maximum extension length in either direction (seed already covers `len` bp)
     let max_ext = lmax.saturating_sub(seed.len);
 
@@ -217,42 +236,14 @@ pub fn extend_seed(
         (0, 0)
     };
 
-    // ---- Compute full LTR boundaries ----
     // left_ext_i/j is how far we extended leftward into u/v (from seed start).
     // right_ext_i/j is how far we extended rightward from seed end.
-    let left_ltr_start  = seed.pos1 - left_ext_i;
-    let right_ltr_start = seed.pos2 - left_ext_j;
-    let left_ltr_end    = seed.pos1 + seed.len - 1 + right_ext_i;
-    let right_ltr_end   = seed.pos2 + seed.len - 1 + right_ext_j;
-
-    // ---- Length check ----
-    let llen = left_ltr_end - left_ltr_start + 1;
-    let rlen = right_ltr_end - right_ltr_start + 1;
-    if llen < lmin || llen > lmax || rlen < lmin || rlen > lmax {
-        return None;
-    }
-
-    // ---- Post-extension distance re-check ----
-    // GT's checklengthanddistanceconstraints re-checks the distance between
-    // the 5' ends of the two LTRs after X-drop extension.
-    let post_dist = right_ltr_start - left_ltr_start;
-    if post_dist < dmin || post_dist > dmax {
-        return None;
-    }
-
-    // Pre-TSD similarity estimate (used for overlap tie-breaking).
-    // The definitive similarity is recomputed post-TSD by the caller.
-    let u_ltr = &text[left_ltr_start..=left_ltr_end];
-    let v_ltr = &text[right_ltr_start..=right_ltr_end];
-    let edist = unit_edit_distance(u_ltr, v_ltr);
-    let similarity = 100.0 * (1.0 - edist as f64 / llen.max(rlen) as f64);
-
-    Some(LtrCandidate {
+    LtrCandidate {
         seq_num: seed.seq_num,
-        left_ltr_start,
-        left_ltr_end,
-        right_ltr_start,
-        right_ltr_end,
-        similarity,
-    })
+        left_ltr_start:  seed.pos1 - left_ext_i,
+        right_ltr_start: seed.pos2 - left_ext_j,
+        left_ltr_end:    seed.pos1 + seed.len - 1 + right_ext_i,
+        right_ltr_end:   seed.pos2 + seed.len - 1 + right_ext_j,
+        similarity: 0.0,
+    }
 }
