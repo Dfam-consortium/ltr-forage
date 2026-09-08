@@ -46,6 +46,23 @@ nearly four times as long as it does on one.
 terminal motif combinations that characterise real insertions, following
 LTR_retriever, instead of by distance from the X-drop boundary alone.
 
+`--reextend` replaces the X-drop boundaries of each surviving candidate with
+a local alignment of the two LTR regions, computed in process with the
+RepeatMasker scoring scheme. X-drop with the LTRharvest defaults stops at any
+2 bp indel between the two LTR copies, which leaves many real elements with
+LTRs short by tens to hundreds of bases; on hg38, re-extension places 1,155
+of the 1,929 RepeatMasker-annotated elements it finds within 20 bp of their
+annotated boundaries, against 419 of 1,902 without it, and adds about ten
+seconds to the run.
+
+`--domain-hmm` searches each candidate's six-frame translation against a
+HMMER3 profile file in process, using `libnail`, and reports whether the hits
+belong to LTR retrotransposon proteins or to other transposon and host
+proteins. On hg38 with LTR_retriever's TEfam profiles, a hit of LTR order
+marks 68% of the RepeatMasker-annotated elements and 0.5% of the other
+candidates, which is the evidence LTR_retriever gets from HMMER, found here
+on more elements.
+
 By default, `ltr-forage` produces output that is format-compatible with
 LTRharvest, making it a transparent replacement in existing pipelines.
 
@@ -177,6 +194,151 @@ Overlapping predictions on the same sequence are resolved according to
 - `no` — discard all elements in any overlapping cluster
 - `all` — report all elements regardless of overlap
 
+### Phase 4 — Re-extension (optional, `--reextend`)
+
+The X-drop extension in Phase 2 uses LTRharvest's scores (match +2,
+mismatch −2, gap −3, threshold 5), so any indel of 2 bp or more between the
+two LTR copies ends the extension there, and the bases beyond it are left out
+of both LTRs even when they are otherwise identical. Re-extension recovers
+them. For each candidate that survives overlap removal:
+
+1. A window is cut around each LTR, reaching `--reextend-ltr-max` (default
+   2000) plus `--reextend-vicinity` (default 100) bases beyond the current
+   LTR end on the outer side, and the same distance on the inner side up to
+   half of the internal region, so the two windows never overlap.
+2. The left window is aligned against the right window with `rmblast-lib`,
+   using RepeatMasker's nucleotide comparison matrix (embedded in the binary),
+   gap open 20 and extend 5, word size 14, and complexity-adjusted scoring.
+3. The best-scoring plus-strand HSP that overlaps both X-drop LTRs becomes
+   the new LTR pair. The overlap requirement matters: the windows can reach a
+   neighbouring copy of the same family, and its alignment may score higher
+   than the pair the seed came from.
+4. Each end of the alignment is trimmed until its terminal `--trim-window`
+   columns (default 6) are gap-free and contain at least `--trim-matches`
+   (default 6) matches. This removes the few bases of chance matches a local
+   alignment carries past the true end, without consulting the TSD, so the
+   TSD found afterwards remains evidence rather than a consequence of the
+   trim.
+5. The reported similarity becomes the identity of the trimmed alignment,
+   with gaps counted as differences.
+
+A candidate whose alignment produces no qualifying HSP keeps its X-drop
+boundaries. Larger windows are not better in genomes with nested elements:
+in rice, 5 kb windows lost real elements to alignments that ran into
+neighbours, and 2 kb windows gained them.
+
+### Phase 5 — Protein-domain search (optional, `--domain-hmm`)
+
+Most of the candidates a whole-genome run reports are not LTR elements: on
+hg38, 95% are pairs of SINEs, simple repeats or other similar sequence a few
+kb apart. Of the signals we measured on hg38, rice and Arabidopsis, a
+retrotransposon protein domain in the internal region separates the real
+elements best. `--domain-hmm FILE` searches each candidate's six-frame
+translation against a HMMER3 file of profile HMMs in process, using
+`libnail`'s implementation of HMMER's profile scoring. LTR_retriever's
+`TEfam.hmm` (102 Pfam profiles) is the intended input; any HMMER3 amino-acid
+profile file works.
+
+ltr-forage translates each element plus `--domain-flank` bases (default 50)
+on each side in six frames, with stop codons as X. For every frame and
+profile it scores each diagonal that shares a 3-mer with the profile's
+consensus sequence as an ungapped alignment against the profile's match
+emissions; when the best diagonal reaches 18 bits, `libnail` runs the
+Forward algorithm over a band of rows around it, applies its composition-bias
+correction, and converts the score to an E-value with the profile's own
+statistics, taking six frames per candidate as the database size, as
+hmmsearch would. Hits with an E-value at or below `--domain-evalue`
+(default 0.05) count. The seeding replaces the MMseqs2 stage nail's own
+pipeline uses; on chr22 it keeps 97% of the pairs a full Forward pass would
+report at that threshold while passing 7% of all pairs. On the same chr22
+candidates ltr-forage finds 39 of the 43 domain hits hmmsearch reports, with
+E-values within a few fold, and adds 16 more, mostly near the threshold. On
+hg38 the search scores 25.5 million frame-profile pairs, seeds 1.7 million
+of them, and takes 27 minutes on 64 threads, most of it in `libnail`'s
+Forward pass. We did not time hmmsearch on the same input; its SIMD filters
+make it likely faster, so a stronger prefilter is the next thing to try if
+the run time matters.
+
+The hits are classified as LTR_retriever's `annotate_TE.pl` does: profiles
+belong to an LTR list or a not-LTR list (DNA transposons, LINEs, helitrons,
+host genes); a candidate whose hits are all on the LTR list is `LTR`, all on
+the other list `notLTR`, both `mixture`, and hits on neither list `NA`.
+Superfamily is `Gypsy` when Copia-list hits are fewer than 0.3 of the
+Gypsy-list hits, `Copia` when Gypsy-list hits are fewer than 0.9 of the
+Copia-list hits, and strand `+` or `-` when hits on the other strand are
+fewer than 0.4 of those on it. The HMMER3
+reader is adapted from nail's, under its BSD-3-Clause licence.
+
+### Phase 6 — Decision and library (`--keep`, `--library`)
+
+Every candidate gets one decision, recorded in the table's `keep` and
+`evidence` columns and used to select what `--library FILE` writes. The
+rule has one knob, `--keep LEVEL`:
+
+| Level | Kept when |
+|---|---|
+| `domain` | an LTR-order domain hit |
+| `standard` (default) | an LTR-order domain hit, or TG..CA at the ends with a TSD of 5 bp or more |
+| `loose` | an LTR-order domain hit, a TSD of 5 bp or more, or TG..CA with a 4 bp TSD |
+| `none` | always |
+
+At every level ltr-forage rejects a candidate whose protein hits are of
+not-LTR or mixed order; those are LINE, DNA-transposon and host-gene pairs,
+and on hg38 1.3% of them are annotated LTR elements. `--internal-gap-max FRAC` adds a
+second rejection for candidates whose internal region has a single-copy
+stretch longer than that fraction of it (needs `--internal-stats`); it is
+off by default because it costs recall in genomes with low-copy families
+(Arabidopsis).
+
+ltr-forage also rejects satellite arrays and Alu dimers with an ERV
+inserted between two monomers; those pass the evidence rule as
+domain-bearing elements with a satellite or Alu "LTR". It aligns each LTR
+against itself with
+`rmblast-lib` and records the fraction of it covered by plus-strand
+alignments off the main diagonal (`lltr_self_cov`, `rltr_self_cov`); a
+satellite monomer, an Alu dimer or a microsatellite covers itself
+completely. `--tandem-max` (default 0.99) rejects a candidate when either
+LTR reaches that coverage. The threshold has to sit near 1: real LTRs with
+tandem sub-repeats, the LTR12 family in human among them, reach 0.5 to 0.98,
+and a threshold of 0.5 would have removed 71 annotated elements on hg38. At
+0.99 the check removes 17 kept candidates on hg38 (10 satellite cases, 5
+Alu-dimer pairs, 2 on unannotated contigs), 52 on rice and none on
+Arabidopsis, and no annotated element on any of the three. The alignment
+adds 40 s to an hg38 run.
+
+Measured against RepeatMasker annotation (strict or loose harness), the
+levels keep:
+
+| Genome | Candidates | Annotated | `domain` | `standard` | `loose` |
+|---|---|---|---|---|---|
+| hg38 | 41,661 | 2,267 | 68.5% of annotated, 88.7% precise | 68.7%, 86.7% | 71.6%, 70.5% |
+| Arabidopsis | 1,789 | 415 | 78.1%, 62.2% | 81.4%, 62.8% | 82.7%, 61.5% |
+| rice | 7,092 | 3,216 | 84.3%, 69.5% | 86.4%, 69.9% | 87.1%, 69.3% |
+
+The plant precisions are floors set by the annotation: when we inspected
+the kept candidates the harness calls false there (analysis document,
+sections 9 and 10), most were elements whose two LTRs the library names
+differently, or nested copies. On rice the motif-and-TSD route alone is 98%
+precise and adds 2% of recall over `domain`. There is no separate
+tandem-repeat finder: of the 1,797 candidates `standard` keeps on hg38
+before the self-alignment check, 11 have an LTR that is mostly satellite,
+against 1,091 of all 41,661 candidates, and the check above removes 10 of
+the 11.
+
+`--library FILE` writes the kept elements as three FASTA records each, left
+LTR, internal region and right LTR, named the way LTR_retriever names its
+redundant library and in genome orientation:
+
+```
+>chr22:7291483..7292450_LTR#LTR/unknown domain,tsd6,tgca
+>chr22:7292451..7299693_INT#LTR/unknown domain,tsd6,tgca
+>chr22:7299694..7300657_LTR#LTR/unknown domain,tsd6,tgca
+```
+
+The superfamily comes from the domain hits (`Gypsy`, `Copia` or `unknown`)
+and the description repeats the evidence. RepeatModeler's LTRPipeline reads
+this file in place of LTR_retriever's output.
+
 ---
 
 ## Differences from GenomeTools LTRharvest
@@ -256,6 +418,11 @@ Before running `ltr-forage`, build a `.sufr` index of your genome with the
 sufr create --dna genome.fa -o genome.sufr
 ```
 
+`sufr create --dna` stores the sequence upper-cased, so a soft-masked FASTA
+(lowercase runs, as NCBI distributes them) needs no preprocessing; the index
+and everything `ltr-forage` reads from it are case-free. Query strings given
+to `sufr count` are not normalised, so pass them in upper case.
+
 ---
 
 ## Usage
@@ -287,9 +454,33 @@ TSD and motif options:
       --motifmis <N>        Allowed mismatches in the motif [default: 0]
       --tiered-tsd          Use tiered TSD selection instead of GT-compatible deviation-only
 
+Re-extension options:
+      --reextend            Re-extend each LTR pair with a local alignment after overlap removal
+      --reextend-ltr-max <BP>   Longest LTR the alignment windows allow for [default: 2000]
+      --reextend-vicinity <BP>  Extra window beyond that on the outer side of each LTR [default: 100]
+      --trim-window <N>     Terminal alignment columns that must be clean for an end to stand [default: 6]
+      --trim-matches <N>    Matches required inside that terminal window [default: 6]
+      --internal-stats      Count 20-mers of each internal region against the index and
+                            report coverage and the longest single-copy stretch (tsv output)
+
+Domain search options:
+      --domain-hmm <FILE>   HMMER3 file of protein profiles; search each candidate's six-frame
+                            translation against it and report order, superfamily and strand
+      --domain-evalue <E>   E-value threshold for a domain hit [default: 0.05]
+      --domain-flank <BP>   Bases added on each side of the element before translation [default: 50]
+
+Decision and library options:
+      --keep <LEVEL>        Evidence a candidate needs: domain | standard | loose | none [default: standard]
+      --internal-gap-max <FRAC>  Also reject candidates whose internal region has a single-copy
+                            stretch longer than this fraction of it (needs --internal-stats)
+      --library <FILE>      Write the kept elements as a FASTA library (left LTR, internal
+                            region, right LTR per element)
+      --tandem-max <FRAC>   Reject a candidate when either LTR aligns to itself off the diagonal
+                            over at least this fraction of its length [default: 0.99]
+
 Output and performance options:
       --overlaps <STRATEGY> Overlap removal strategy: all | best | no [default: best]
-      --format <FORMAT>     Output format [default: gt] [possible values: gt]
+      --format <FORMAT>     Output format [default: gt] [possible values: gt, tsv]
   -j, --threads <N>         Threads for parallel extension (0 = all CPUs) [default: 0]
   -h, --help                Print help
 ```
@@ -354,6 +545,53 @@ All positions are **1-based and inclusive**.  The `seq-nr` column is a
 | 11 | seq-nr | Sequence number (0-based) |
 
 ---
+
+### Per-candidate table (`--format tsv`)
+
+`--format tsv` writes a header line and one tab-separated row per candidate,
+with every value the later stages decide on, so a decision can be inspected
+rather than inferred. Coordinates are 1-based and inclusive, relative to the
+sequence named in the first column.
+
+| Column | Description |
+|---|---|
+| `seq` | Sequence name from the index |
+| `elem_start`, `elem_end`, `elem_len` | Element span |
+| `lltr_start`, `lltr_end`, `lltr_len`, `rltr_start`, `rltr_end`, `rltr_len` | LTR spans after re-extension (or the X-drop spans when `--reextend` is off or no alignment qualified) |
+| `identity` | Identity of the trimmed alignment in percent, gaps counted as differences; the X-drop similarity when not re-extended |
+| `xdrop_lltr_start` … `xdrop_rltr_end`, `xdrop_similarity` | The boundaries and similarity the X-drop stage produced |
+| `reextended` | 1 when the row's boundaries come from the alignment |
+| `aln_score`, `aln_columns` | Raw score and aligned columns of the trimmed alignment |
+| `trim_l5`, `trim_r5`, `trim_l3`, `trim_r3` | Bases removed by the end trim at the 5′ end of the left and right LTR and at their 3′ ends |
+| `window_edge` | 1 when the alignment reached within 5 bp of a window edge that was not a sequence end: the LTR may be longer than the window, or the pair sits in a larger duplication |
+| `tsd_len`, `tsd_seq`, `tsd_shift_l`, `tsd_shift_r` | Longest exact direct repeat (4 to 20 bp) flanking the element, allowing 0 or 1 bp of play at each end; `.` and 0 when none |
+| `motif` | First two bases of the left LTR and last two of the right LTR (TGCA for the canonical termini) |
+| `ppt_purines15`, `ppt_offset` | Purine count in the most purine-rich 15 bp window within 30 bp before the right LTR, and that window's start relative to the right LTR |
+| `pbs_offset` | Offset of the first TGG within 20 bp after the left LTR, or −1 |
+| `n_count` | Ns inside the element |
+| `xdrop_tsd_len` | TSD length the X-drop stage's own search reported |
+| `int_tiles`, `int_multi_frac`, `int_gap_frac`, `int_gap_bp` | With `--internal-stats`: number of 20-mer tiles taken every 10 bp across the internal region (tiles containing N skipped), the fraction seen at least three times in the genome on either strand, and the longest run of single-copy tiles as a fraction of the tiles and in bases; `.` otherwise |
+| `dom_order`, `dom_superfamily`, `dom_strand` | With `--domain-hmm`: `LTR`, `notLTR`, `mixture`, `NA` or `none`; `Gypsy`, `Copia` or `unknown`; `+`, `-` or `?`, as described under Phase 5; `.` otherwise |
+| `dom_best_e`, `dom_hits` | Best E-value, and every hit as `accession:E-value:frame` (frames `aa1`..`aa3` forward, `rev_aa1`..`rev_aa3` on the reverse complement), comma separated; `.` when none |
+| `lltr_self_cov`, `rltr_self_cov` | Fraction of each LTR covered by plus-strand alignments of the LTR against itself off the main diagonal; 1.00 for a satellite monomer or an Alu dimer, 0 for unique sequence |
+| `keep`, `evidence` | 1 when the candidate passes `--keep`, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `gapF` when `--internal-gap-max` rejected it, or `none` |
+
+The TSD and motif columns are computed at the final boundaries with at most
+1 bp of play, so they keep their discriminating power: on hg38 a 5 bp TSD
+appears on 17% of RepeatMasker-annotated elements (41% of those over 95%
+identical) and on 1.3% of the other candidates. A wider search would find a
+short repeat almost everywhere.
+
+The internal-region columns describe whether the sequence between the LTRs
+looks repeat-derived end to end. An LTR element's internal region rarely
+contains a long single-copy stretch; the sequence between two SINE copies a
+few kb apart usually does. On hg38 a longest single-copy stretch of at most
+10% of the region holds for 96% of annotated elements and 32% of the other
+candidates; in Arabidopsis, whose LTR families are low copy, the same cut
+keeps only half the real elements, so the statistic is reported here and any
+filter on it is a separate choice. The count loads the suffix array (4 bytes
+per base for genomes under 4 Gb) and the tile table: on hg38, 25.5 million
+tiles, 140 s and 45 GB at peak; on rice, 30 s.
 
 ## Comparing with GenomeTools LTRharvest on hg38
 

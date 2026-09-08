@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use libsufr::{
     sufr_file::SufrFile,
@@ -7,8 +7,13 @@ use libsufr::{
 };
 use rayon::prelude::*;
 
+mod decide;
+mod domain;
+mod features;
+mod internal;
 mod ltr;
 mod maxpairs;
+mod reextend;
 mod stream;
 mod tsd;
 mod xdrop;
@@ -18,11 +23,15 @@ mod xdrop;
 enum OutputFormat {
     /// GenomeTools LTR_harvest compatible output (default)
     Gt,
+    /// One tab-separated row per candidate with boundaries before and after
+    /// re-extension, alignment details, TSD, motif, PPT and PBS candidates
+    Tsv,
 }
 
 // --------------------------------------------------
 #[derive(Parser, Debug)]
 #[command(
+    version,
     name = "ltr-forage",
     about = "Identify LTR retrotransposon candidates using a sufr suffix array index",
     allow_negative_numbers = true,
@@ -110,6 +119,70 @@ struct Args {
     /// Output format
     #[arg(long, default_value = "gt", value_name = "FORMAT")]
     format: OutputFormat,
+
+    /// Re-extend each candidate's LTR pair with a local alignment (rmblast
+    /// scoring) after overlap removal, and trim the alignment ends
+    #[arg(long, default_value_t = false)]
+    reextend: bool,
+
+    /// Longest LTR the re-extension windows allow for (bp)
+    #[arg(long, default_value_t = 2000, value_name = "BP")]
+    reextend_ltr_max: usize,
+
+    /// Extra window beyond that on the outer side of each LTR (bp)
+    #[arg(long, default_value_t = 100, value_name = "BP")]
+    reextend_vicinity: usize,
+
+    /// Terminal alignment window that must be clean for an end to stand (columns)
+    #[arg(long, default_value_t = 6, value_name = "N")]
+    trim_window: usize,
+
+    /// Matches required inside that terminal window
+    #[arg(long, default_value_t = 6, value_name = "N")]
+    trim_matches: usize,
+
+    /// Count 20-mers from each internal region against the genome index and
+    /// report their coverage and the longest single-copy stretch (tsv output);
+    /// loads the suffix array into memory
+    #[arg(long, default_value_t = false)]
+    internal_stats: bool,
+
+    /// HMMER3 file of transposable-element protein profiles (LTR_retriever's
+    /// TEfam.hmm works); each candidate's six-frame translation is searched
+    /// against it in process and the order, superfamily and strand reported
+    #[arg(long, value_name = "FILE")]
+    domain_hmm: Option<String>,
+
+    /// E-value threshold for a domain hit
+    #[arg(long, default_value_t = 0.05, value_name = "E")]
+    domain_evalue: f64,
+
+    /// Bases added on each side of the element before translation
+    #[arg(long, default_value_t = 50, value_name = "BP")]
+    domain_flank: usize,
+
+    /// Write the kept elements as a FASTA library: left LTR, internal
+    /// region and right LTR per element, named like LTR_retriever's
+    /// redundant library
+    #[arg(long, value_name = "FILE")]
+    library: Option<String>,
+
+    /// Evidence a candidate needs to be kept in the library and marked kept
+    /// in the table; every level rejects candidates whose protein hits are
+    /// not LTR-order
+    #[arg(long, value_enum, default_value_t = decide::KeepLevel::Standard, value_name = "LEVEL")]
+    keep: decide::KeepLevel,
+
+    /// Also reject a candidate whose internal region has a single-copy
+    /// stretch longer than this fraction of it (needs --internal-stats)
+    #[arg(long, value_name = "FRAC")]
+    internal_gap_max: Option<f64>,
+
+    /// Reject a candidate when either LTR aligns to itself off the diagonal
+    /// over at least this fraction of its length (satellite monomers, Alu
+    /// dimers, microsatellites); values above 1 disable the check
+    #[arg(long, default_value_t = 0.99, value_name = "FRAC")]
+    tandem_max: f64,
 }
 
 // --------------------------------------------------
@@ -193,7 +266,13 @@ where
     let t_start = std::time::Instant::now();
     let mut sf: SufrFile<T> = SufrFile::read(&args.sufr, false)?;
 
-    let text = std::mem::take(&mut sf.text);
+    // sufr stores whole FASTA header lines; output names are the first word
+    let seq_names: Vec<String> = sf
+        .sequence_names
+        .iter()
+        .map(|n| n.split_whitespace().next().unwrap_or("").to_string())
+        .collect();
+    let text: &[u8] = &sf.text;
     let num_suffixes = sf.len_suffixes.to_usize();
     let seq_starts: Vec<usize> = sf.sequence_starts.iter().map(|v| v.to_usize()).collect();
     let width = std::mem::size_of::<T>();
@@ -385,6 +464,177 @@ where
         .map(|i| paired[i].clone())
         .collect();
 
+    // ---- Phase 3d: re-extension (optional) ----
+    // A local alignment of the two LTR windows replaces the X-drop
+    // boundaries, which stop at the first short indel between the copies.
+    // Candidates whose alignment fails keep their X-drop boundaries.
+    let reext: Vec<Option<reextend::Reextended>> = if args.reextend {
+        let aligner = reextend::Aligner::new()?;
+        let cfg = reextend::ReextendConfig {
+            ltr_max: args.reextend_ltr_max,
+            vicinity: args.reextend_vicinity,
+            trim_window: args.trim_window,
+            trim_matches: args.trim_matches,
+        };
+        let out: Vec<Option<reextend::Reextended>> = surviving
+            .par_iter()
+            .map(|(c, ti)| {
+                let seq_start = seq_starts[c.seq_num];
+                let seq_end = seq_starts
+                    .get(c.seq_num + 1)
+                    .map(|&s| s - 1)
+                    .unwrap_or(text.len() - 1);
+                reextend::reextend(
+                    &aligner, &cfg, &text, seq_start, seq_end,
+                    ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end,
+                )
+            })
+            .collect();
+        let n_ok = out.iter().filter(|r| r.is_some()).count();
+        let n_edge = out.iter().filter(|r| r.as_ref().map_or(false, |x| x.at_window_edge)).count();
+        let n_moved = out
+            .iter()
+            .zip(surviving.iter())
+            .filter(|(r, (_, ti))| r.as_ref().map_or(false, |x| {
+                x.left_ltr_start != ti.left_ltr_start || x.left_ltr_end != ti.left_ltr_end
+                    || x.right_ltr_start != ti.right_ltr_start || x.right_ltr_end != ti.right_ltr_end
+            }))
+            .count();
+        eprintln!(
+            "Phase 3d: re-extended {} of {} candidate(s), {} moved, {} at a window edge ({:.1}s elapsed)",
+            n_ok, surviving.len(), n_moved, n_edge, t_start.elapsed().as_secs_f64(),
+        );
+        out
+    } else {
+        vec![None; surviving.len()]
+    };
+
+    // ---- Phase 3e: internal-region statistics (optional) ----
+    let final_coords: Vec<(usize, usize, usize, usize)> = surviving
+        .iter()
+        .zip(reext.iter())
+        .map(|((_, ti), re)| match re {
+            Some(r) => (r.left_ltr_start, r.left_ltr_end, r.right_ltr_start, r.right_ltr_end),
+            None => (ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end),
+        })
+        .collect();
+    let internal_stats: Vec<Option<internal::InternalStats>> = if args.internal_stats {
+        let regions: Vec<Vec<Vec<u8>>> = final_coords
+            .par_iter()
+            .map(|&(_, l1e, l2s, _)| if l2s > l1e + 1 { internal::tiles(text, l1e + 1, l2s - 1) } else { Vec::new() })
+            .collect();
+        let n_tiles: usize = regions.iter().map(|r| r.len()).sum();
+        let counts = internal::count_tiles(&mut sf, &regions)?;
+        eprintln!(
+            "Phase 3e: counted {} tile(s), {} distinct k-mer(s) with reverse complements ({:.1}s elapsed)",
+            n_tiles, counts.len(), t_start.elapsed().as_secs_f64(),
+        );
+        regions.iter().map(|r| Some(internal::stats(r, &counts))).collect()
+    } else {
+        vec![None; surviving.len()]
+    };
+    let text: &[u8] = &sf.text;
+
+    // ---- Phase 3f: protein-domain search (optional) ----
+    let domain_calls: Vec<Option<domain::DomainCall>> = if let Some(path) = &args.domain_hmm {
+        let db = domain::DomainDb::load(path)?;
+        let num_targets = 6 * final_coords.len().max(1);
+        let out: Vec<Option<domain::DomainCall>> = final_coords
+            .par_iter()
+            .zip(surviving.par_iter())
+            .map_init(|| domain::Searcher::new(&db), |searcher, (&(l1s, _, _, l2e), (c, _))| {
+                let seq_start = seq_starts[c.seq_num];
+                let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+                let s = l1s.saturating_sub(args.domain_flank).max(seq_start);
+                let e = (l2e + args.domain_flank).min(seq_end);
+                searcher.search(&db, &text[s..=e], num_targets, args.domain_evalue).ok()
+            })
+            .collect();
+        let mut st = domain::SearchStats::default();
+        for d in out.iter().flatten() {
+            st += d.stats;
+        }
+        eprintln!(
+            "Phase 3f: {} frame/profile pair(s), {} seeded, {} passed the Forward filter (thread time: seed {:.1}s, align {:.1}s)",
+            st.pairs, st.seeded, st.forward_passed,
+            st.seed_time.as_secs_f64(), st.align_time.as_secs_f64(),
+        );
+        let with_hits = out.iter().filter(|d| d.as_ref().map_or(false, |d| !d.hits.is_empty())).count();
+        let ltr = out.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "LTR")).count();
+        let not = out.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "notLTR" || d.order == "mixture")).count();
+        eprintln!(
+            "Phase 3f: {} profile(s); {} candidate(s) with a domain hit, {} LTR order, {} notLTR or mixture ({:.1}s elapsed)",
+            db.entries.len(), with_hits, ltr, not, t_start.elapsed().as_secs_f64(),
+        );
+        out
+    } else {
+        vec![None; surviving.len()]
+    };
+
+    // ---- Phase 3f2: LTR self-alignment (tandem-repeat check) ----
+    let self_cov: Vec<(f64, f64)> = {
+        let aligner = reextend::Aligner::new()?;
+        final_coords
+            .par_iter()
+            .map(|&(l1s, l1e, l2s, l2e)| {
+                (reextend::self_repeat_cov(&aligner, &text[l1s..=l1e]), reextend::self_repeat_cov(&aligner, &text[l2s..=l2e]))
+            })
+            .collect()
+    };
+    eprintln!(
+        "Phase 3f: self-alignment: {} candidate(s) with an LTR at least {:.0}% self-repeat ({:.1}s elapsed)",
+        self_cov.iter().filter(|(a, b)| a.max(*b) >= args.tandem_max).count(),
+        100.0 * args.tandem_max,
+        t_start.elapsed().as_secs_f64(),
+    );
+
+    // ---- Phase 3g: decisions and the library ----
+    if args.internal_gap_max.is_some() && !args.internal_stats {
+        eprintln!("Warning: --internal-gap-max has no effect without --internal-stats");
+    }
+    if args.domain_hmm.is_none() && args.keep == decide::KeepLevel::Domain {
+        eprintln!("Warning: --keep domain keeps nothing without --domain-hmm");
+    }
+    let decisions: Vec<decide::Decision> = surviving
+        .iter()
+        .zip(final_coords.iter())
+        .zip(domain_calls.iter())
+        .zip(internal_stats.iter())
+        .zip(self_cov.iter())
+        .map(|(((((c, _), &(l1s, _, _, l2e)), dc), ist), &(sc_l, sc_r))| {
+            let seq_off = seq_starts[c.seq_num];
+            let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+            let tsd = features::tsd_at(text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
+            let motif = features::motif_at(text, l1s, l2e);
+            decide::decide(
+                args.keep,
+                args.internal_gap_max,
+                args.tandem_max,
+                &decide::Evidence { domain: dc.as_ref(), tsd_len: tsd.len, motif: &motif, gap_frac: ist.as_ref().map(|s| s.gap_frac), self_cov: sc_l.max(sc_r) },
+            )
+        })
+        .collect();
+    let kept = decisions.iter().filter(|d| d.keep).count();
+    let vetoed = decisions.iter().filter(|d| d.why.starts_with("veto:notLTR") || d.why.starts_with("veto:mixture")).count();
+    let tandem = decisions.iter().filter(|d| d.why.starts_with("veto:tandem")).count();
+    eprintln!(
+        "Phase 3g: kept {} of {} candidate(s) at --keep {:?}, {} vetoed by protein hits, {} by LTR self-repeat ({:.1}s elapsed)",
+        kept, decisions.len(), args.keep, vetoed, tandem, t_start.elapsed().as_secs_f64(),
+    );
+    if let Some(path) = &args.library {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(path).with_context(|| format!("creating {}", path))?);
+        for (((c, _), &ltrs), (d, dc)) in surviving.iter().zip(final_coords.iter()).zip(decisions.iter().zip(domain_calls.iter())) {
+            if !d.keep {
+                continue;
+            }
+            let name = seq_names.get(c.seq_num).map(|s| s.as_str()).unwrap_or("?");
+            let sf = dc.as_ref().map(|d| d.superfamily.as_str()).unwrap_or("unknown");
+            decide::write_element(&mut out, name, text, seq_starts[c.seq_num], ltrs, sf, &d.why)?;
+        }
+        std::io::Write::flush(&mut out)?;
+        eprintln!("Wrote {} element(s) to {}", kept, path);
+    }
+
     eprintln!(
         "Phase 4: {} candidate(s) with TSD, {} with outer motif, {} with inner motif ({:.1}s elapsed)",
         surviving.iter().filter(|(_, t)| t.has_tsd).count(),
@@ -397,13 +647,17 @@ where
     match args.format {
         OutputFormat::Gt => {
             println!(
-                "# args=-index {} -seed {} -minlenltr {} -maxlenltr {} -mindistltr {} -maxdistltr {} -similar {} -xdrop {} -mintsd {} -maxtsd {} -overlaps {}",
+                "# args=-index {} -seed {} -minlenltr {} -maxlenltr {} -mindistltr {} -maxdistltr {} -similar {} -xdrop {} -mintsd {} -maxtsd {} -overlaps {}{}",
                 args.sufr,
                 args.min_seed, args.ltr_min, args.ltr_max,
                 args.dist_min, args.dist_max,
                 args.similar as u32, args.xdrop,
                 args.mintsd, args.maxtsd,
                 args.overlaps,
+                if args.reextend {
+                    format!(" -reextend {} -reextend-vicinity {} -trim {}/{}",
+                        args.reextend_ltr_max, args.reextend_vicinity, args.trim_matches, args.trim_window)
+                } else { String::new() },
             );
             println!("# predictions are reported in the following way");
             println!("# s(ret) e(ret) l(ret) s(lLTR) e(lLTR) l(lLTR) s(rLTR) e(rLTR) l(rLTR) sim(LTRs) seq-nr ");
@@ -417,22 +671,84 @@ where
             println!("# sim = similarity");
             println!("# seq-nr = sequence number");
 
-            for (c, ti) in &surviving {
+            for ((c, ti), re) in surviving.iter().zip(reext.iter()) {
                 let seq_off = seq_starts.get(c.seq_num).copied().unwrap_or(0);
                 let rel1 = |abs: usize| abs - seq_off + 1;
+                let (l1s, l1e, l2s, l2e, sim) = match re {
+                    Some(r) => (r.left_ltr_start, r.left_ltr_end, r.right_ltr_start, r.right_ltr_end, r.identity),
+                    None => (ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end, c.similarity),
+                };
                 println!(
                     "{}  {}  {}  {}  {}  {}  {}  {}  {}  {:.2}  {}",
-                    rel1(ti.left_ltr_start),
-                    rel1(ti.right_ltr_end),
-                    ti.right_ltr_end - ti.left_ltr_start + 1,
-                    rel1(ti.left_ltr_start),
-                    rel1(ti.left_ltr_end),
-                    ti.left_ltr_end - ti.left_ltr_start + 1,
-                    rel1(ti.right_ltr_start),
-                    rel1(ti.right_ltr_end),
-                    ti.right_ltr_end - ti.right_ltr_start + 1,
-                    c.similarity,
+                    rel1(l1s),
+                    rel1(l2e),
+                    l2e - l1s + 1,
+                    rel1(l1s),
+                    rel1(l1e),
+                    l1e - l1s + 1,
+                    rel1(l2s),
+                    rel1(l2e),
+                    l2e - l2s + 1,
+                    sim,
                     c.seq_num,
+                );
+            }
+        }
+        OutputFormat::Tsv => {
+            println!(
+                "seq\telem_start\telem_end\telem_len\tlltr_start\tlltr_end\tlltr_len\trltr_start\trltr_end\trltr_len\tidentity\t\
+                 xdrop_lltr_start\txdrop_lltr_end\txdrop_rltr_start\txdrop_rltr_end\txdrop_similarity\t\
+                 reextended\taln_score\taln_columns\ttrim_l5\ttrim_r5\ttrim_l3\ttrim_r3\twindow_edge\t\
+                 tsd_len\ttsd_seq\ttsd_shift_l\ttsd_shift_r\tmotif\tppt_purines15\tppt_offset\tpbs_offset\tn_count\txdrop_tsd_len\t\
+                 int_tiles\tint_multi_frac\tint_gap_frac\tint_gap_bp\t\
+                 dom_order\tdom_superfamily\tdom_strand\tdom_best_e\tdom_hits\tlltr_self_cov\trltr_self_cov\tkeep\tevidence"
+            );
+            for ((((((c, ti), re), ist), dc), dec), &(sc_l, sc_r)) in surviving.iter().zip(reext.iter()).zip(internal_stats.iter()).zip(domain_calls.iter()).zip(decisions.iter()).zip(self_cov.iter()) {
+                let seq_off = seq_starts.get(c.seq_num).copied().unwrap_or(0);
+                let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+                let rel1 = |abs: usize| abs - seq_off + 1;
+                let (l1s, l1e, l2s, l2e, sim) = match re {
+                    Some(r) => (r.left_ltr_start, r.left_ltr_end, r.right_ltr_start, r.right_ltr_end, r.identity),
+                    None => (ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end, c.similarity),
+                };
+                let tsd = features::tsd_at(&text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
+                let motif = features::motif_at(&text, l1s, l2e);
+                let (ppt_n, ppt_off) = features::ppt(&text, l2s, seq_off);
+                let pbs_off = features::pbs(&text, l1e, seq_end);
+                let ns = features::n_count(&text, l1s, l2e);
+                let name = seq_names.get(c.seq_num).map(|s| s.as_str()).unwrap_or("?");
+                let (reextended, score, cols, tr, edge) = match re {
+                    Some(r) => (1, r.score, r.columns, r.trimmed, r.at_window_edge as u8),
+                    None => (0, 0, 0, (0, 0, 0, 0), 0),
+                };
+                let (dord, dsf, dstr, dbe, dhits) = match dc {
+                    Some(d) => {
+                        let best = d.hits.iter().map(|h| h.e_value).fold(f64::INFINITY, f64::min);
+                        let list = if d.hits.is_empty() { ".".to_string() } else {
+                            d.hits.iter().map(|h| format!("{}:{:.1e}:{}", h.accession, h.e_value, ["aa1","aa2","aa3","rev_aa1","rev_aa2","rev_aa3"][h.frame])).collect::<Vec<_>>().join(",")
+                        };
+                        (d.order.clone(), d.superfamily.clone(), d.strand.clone(), if best.is_finite() { format!("{:.1e}", best) } else { ".".into() }, list)
+                    }
+                    None => (".".into(), ".".into(), ".".into(), ".".into(), ".".into()),
+                };
+                let (it, imf, igf, igb) = match ist {
+                    Some(s) => (s.tiles.to_string(), format!("{:.3}", s.multi_frac), format!("{:.3}", s.gap_frac), s.gap_bp.to_string()),
+                    None => (".".into(), ".".into(), ".".into(), ".".into()),
+                };
+                println!(
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}",
+                    name, rel1(l1s), rel1(l2e), l2e - l1s + 1,
+                    rel1(l1s), rel1(l1e), l1e - l1s + 1,
+                    rel1(l2s), rel1(l2e), l2e - l2s + 1,
+                    sim,
+                    rel1(ti.left_ltr_start), rel1(ti.left_ltr_end), rel1(ti.right_ltr_start), rel1(ti.right_ltr_end), c.similarity,
+                    reextended, score, cols, tr.0, tr.1, tr.2, tr.3, edge,
+                    tsd.len, if tsd.len > 0 { tsd.seq.as_str() } else { "." }, tsd.shift_left, tsd.shift_right,
+                    motif, ppt_n, ppt_off, pbs_off, ns, ti.tsd_len,
+                    it, imf, igf, igb,
+                    dord, dsf, dstr, dbe, dhits,
+                    sc_l, sc_r,
+                    dec.keep as u8, dec.why,
                 );
             }
         }

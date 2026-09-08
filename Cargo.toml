@@ -9,6 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 libsufr = { path = "../sufr/libsufr" }
+rmblast-lib = { path = "../../rmblast-port/rmblast/rmblast-lib" }
+libnail = "0.6"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rayon = "1"
