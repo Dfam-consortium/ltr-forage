@@ -231,6 +231,48 @@ fn process_branch(
 }
 
 // --------------------------------------------------
+/// Runs of non-ACGT bytes (N gaps, IUPAC codes, separators) in the text.
+///
+/// Sufr compares N like any other byte, so its LCP between two suffixes can
+/// run through matching N gaps.  GenomeTools encodes every wildcard as a
+/// unique special character, so a repeat never contains one.  `cap(p)` is the
+/// number of bases before the first wildcard at or after `p`; two suffixes
+/// sharing a prefix have the same wildcard at the same offset, so capping the
+/// LCP of a suffix at `cap(p)` reproduces GT's LCP.
+pub struct WildRuns {
+    runs: Vec<(usize, usize)>, // [start, end) of each run, sorted
+}
+
+impl WildRuns {
+    pub fn new(text: &[u8]) -> Self {
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < text.len() {
+            if base_idx(text[i]) == SPECIAL {
+                let s = i;
+                while i < text.len() && base_idx(text[i]) == SPECIAL {
+                    i += 1;
+                }
+                runs.push((s, i));
+            } else {
+                i += 1;
+            }
+        }
+        WildRuns { runs }
+    }
+
+    #[inline]
+    pub fn cap(&self, p: usize) -> usize {
+        let k = self.runs.partition_point(|&(_, e)| e <= p);
+        match self.runs.get(k) {
+            Some(&(s, _)) if s <= p => 0,
+            Some(&(s, _)) => s - p,
+            None => usize::MAX,
+        }
+    }
+}
+
+// --------------------------------------------------
 /// Enumerate all maximal repeats of length ≥ `min_len` in the text
 /// represented by the given suffix array (`sa`) and LCP array (`lcp`).
 ///
@@ -249,6 +291,7 @@ fn process_branch(
 /// * `num_suffixes` — number of valid suffixes (may be < text.len() when
 ///                    non-ACGT positions are excluded)
 /// * `min_len`      — minimum repeat length
+/// * `wild`         — wildcard runs; each LCP is capped so no repeat spans one
 /// * `callback`     — called for each maximal repeat `(pos1, pos2, len)`
 pub fn enumerate_maximal_repeats(
     mut sa: impl Iterator<Item = usize>,
@@ -256,6 +299,7 @@ pub fn enumerate_maximal_repeats(
     text: &[u8],
     num_suffixes: usize,
     min_len: usize,
+    wild: &WildRuns,
     cb: &mut dyn FnMut(usize, usize, usize),
 ) {
     if num_suffixes == 0 {
@@ -282,6 +326,7 @@ pub fn enumerate_maximal_repeats(
         // Shift by one so each suffix is placed at the correct node depth;
         // past the last suffix the look-ahead value is 0.
         let cur_lcp = if idx + 1 < num_suffixes { lcp.next().unwrap_or(0) } else { 0 };
+        let cur_lcp = cur_lcp.min(wild.cap(cur_sa));
 
         // ---- Part 1: add current suffix as leaf to current top, if depth matches ----
         let top_lcp = *s_lcp.last().unwrap();
@@ -375,5 +420,35 @@ pub fn enumerate_maximal_repeats(
     let top_lcp = *s_lcp.last().unwrap();
     if top_lcp > 0 {
         process_leaf(false, top_lcp, s_info.last_mut().unwrap(), SENTINEL_POS, text, min_len, cb);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wild_runs_cap() {
+        let w = WildRuns::new(b"ACGTNNNACGTRACGT");
+        assert_eq!(w.cap(0), 4); // ACGT then N
+        assert_eq!(w.cap(4), 0); // on an N
+        assert_eq!(w.cap(6), 0);
+        assert_eq!(w.cap(7), 4); // ACGT then R
+        assert_eq!(w.cap(12), usize::MAX); // no wildcard after
+    }
+
+    #[test]
+    fn n_gaps_make_no_repeats() {
+        // Two identical N gaps flanked by different sequence: GT finds no repeat.
+        let text = b"ACGTTGCAANNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNGGCATTACCGTAGGATCCAANNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNTTAGC";
+        let mut sa: Vec<usize> = (0..text.len()).collect();
+        sa.sort_by(|&a, &b| text[a..].cmp(&text[b..]));
+        let lcp: Vec<usize> = (0..sa.len())
+            .map(|i| if i == 0 { 0 } else { text[sa[i - 1]..].iter().zip(&text[sa[i]..]).take_while(|(x, y)| x == y).count() })
+            .collect();
+        let wild = WildRuns::new(text);
+        let mut hits = Vec::new();
+        enumerate_maximal_repeats(sa.iter().copied(), lcp.iter().copied(), text, sa.len(), 20, &wild, &mut |a, b, l| hits.push((a, b, l)));
+        assert!(hits.is_empty(), "N gaps produced repeats: {:?}", hits);
     }
 }

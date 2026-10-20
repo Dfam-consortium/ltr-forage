@@ -5,7 +5,7 @@
 ///   Length, distance and similarity filters run in main.rs after the TSD
 ///   search, matching GenomeTools' order.
 
-use crate::xdrop::{XdropScores, xdrop_extend};
+use crate::xdrop::{XdropScores, same_base, xdrop_extend};
 
 // --------------------------------------------------
 /// A maximal repeat that passed all LTR distance/length filters.
@@ -113,7 +113,7 @@ pub fn unit_edit_distance(u: &[u8], v: &[u8]) -> usize {
     let extend = |i: i64, k: i64| -> i64 {
         let mut i = i;
         let j = i - k;
-        while i < ulen && j >= 0 && (i - k) < vlen && u[i as usize] == v[(i - k) as usize] {
+        while i < ulen && j >= 0 && (i - k) < vlen && same_base(u[i as usize], v[(i - k) as usize]) {
             i += 1;
         }
         i

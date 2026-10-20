@@ -13,8 +13,10 @@ mod features;
 mod internal;
 mod ltr;
 mod maxpairs;
+mod pbs;
 mod reextend;
 mod stream;
+mod trna;
 mod tsd;
 mod xdrop;
 
@@ -38,7 +40,8 @@ enum OutputFormat {
 )]
 struct Args {
     /// Path to a .sufr index file (created with `sufr create --dna`)
-    sufr: String,
+    #[arg(required_unless_present = "trna_scan")]
+    sufr: Option<String>,
 
     /// Minimum seed length (minimum exact match length between LTR pair)
     #[arg(short = 'm', long, default_value_t = 30, value_name = "BP")]
@@ -161,6 +164,12 @@ struct Args {
     #[arg(long, default_value_t = 50, value_name = "BP")]
     domain_flank: usize,
 
+    /// Keep candidates with a polyprotein domain hit inside an LTR (by
+    /// default they are vetoed: an LTR does not encode the polyprotein, so
+    /// the hit means the "LTR" is internal sequence)
+    #[arg(long)]
+    keep_coding_ltrs: bool,
+
     /// Write the kept elements as a FASTA library: left LTR, internal
     /// region and right LTR per element, named like LTR_retriever's
     /// redundant library
@@ -183,6 +192,32 @@ struct Args {
     /// dimers, microsatellites); values above 1 disable the check
     #[arg(long, default_value_t = 0.99, value_name = "FRAC")]
     tandem_max: f64,
+
+    /// Skip the genome tRNA scan behind the PBS columns of --format tsv
+    /// (pbs_offset is then -1 and pbs_trna, pbs_mm12, pbs_edist18 are ".")
+    #[arg(long)]
+    no_pbs_trna: bool,
+
+    /// Search for the PBS only on the strand the protein domains give
+    /// (default: both strands; the domain strand follows the majority of
+    /// hits and is wrong for some rice Gypsy families)
+    #[arg(long)]
+    pbs_domain_strand: bool,
+
+    /// Write the genome's tRNA library to FILE (FASTA, one entry per distinct
+    /// gene sequence with its copy count and PBS usage) and every tRNA call
+    /// to FILE.tsv
+    #[arg(long, value_name = "FILE")]
+    trna_out: Option<String>,
+
+    /// Longest tRNA intron searched for (ARAGORN -i default 3000; 0 = none)
+    #[arg(long, default_value_t = trna::MAXINTRONLEN, value_name = "BP")]
+    trna_intron_max: i64,
+
+    /// Only scan FASTA for tRNA genes (ARAGORN -t -gc1 -l -i port), print
+    /// the calls as a table and exit; no SUFR index is needed
+    #[arg(long, value_name = "FASTA")]
+    trna_scan: Option<String>,
 }
 
 // --------------------------------------------------
@@ -264,7 +299,8 @@ where
     // Loads the text (needed for random access throughout); the suffix array
     // and LCP array stay on disk and are streamed once in phase 1.
     let t_start = std::time::Instant::now();
-    let mut sf: SufrFile<T> = SufrFile::read(&args.sufr, false)?;
+    let sufr = args.sufr.as_deref().context("a SUFR index is required")?;
+    let mut sf: SufrFile<T> = SufrFile::read(sufr, false)?;
 
     // sufr stores whole FASTA header lines; output names are the first word
     let seq_names: Vec<String> = sf
@@ -311,14 +347,15 @@ where
     // streaming its slice of the SA and LCP arrays from the file.  Seeds are
     // concatenated in piece order, which is the order a single sequential
     // traversal would emit them, so later tie-breaks are unaffected.
+    let wild = maxpairs::WildRuns::new(text);
     let n_pieces = rayon::current_num_threads() * 4;
-    let pieces = stream::split_points(&args.sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
+    let pieces = stream::split_points(sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
     let per_piece: Vec<Result<Vec<ltr::Seed>>> = pieces
         .par_iter()
         .map(|&(start, end)| {
             let n = end - start;
-            let sa = stream::ArrayReader::open(&args.sufr, sa_pos + (start * width) as u64, n, width)?;
-            let lcp = stream::ArrayReader::open(&args.sufr, lcp_pos + (start * width) as u64, n, width)?;
+            let sa = stream::ArrayReader::open(sufr, sa_pos + (start * width) as u64, n, width)?;
+            let lcp = stream::ArrayReader::open(sufr, lcp_pos + (start * width) as u64, n, width)?;
             let mut seeds: Vec<ltr::Seed> = Vec::new();
             maxpairs::enumerate_maximal_repeats(
                 sa,
@@ -326,6 +363,7 @@ where
                 &text,
                 n,
                 args.min_seed,
+                &wild,
                 &mut |pos1, pos2, len| {
                     if let Some(seed) = ltr::filter_seed(
                         pos1, pos2, len,
@@ -547,7 +585,7 @@ where
                 let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
                 let s = l1s.saturating_sub(args.domain_flank).max(seq_start);
                 let e = (l2e + args.domain_flank).min(seq_end);
-                searcher.search(&db, &text[s..=e], num_targets, args.domain_evalue).ok()
+                searcher.search(&db, &text[s..=e], num_targets, args.domain_evalue).ok().map(|mut c| { c.origin = s; c })
             })
             .collect();
         let mut st = domain::SearchStats::default();
@@ -569,6 +607,30 @@ where
         out
     } else {
         vec![None; surviving.len()]
+    };
+    // The same search on each LTR alone: hits to the polyprotein profiles
+    // there mean the "LTR" is internal sequence.
+    let ltr_domain_hits: Vec<Vec<String>> = if let (Some(path), false) = (&args.domain_hmm, args.keep_coding_ltrs) {
+        let db = domain::DomainDb::load(path)?;
+        let num_targets = 6 * final_coords.len().max(1);
+        let out: Vec<Vec<String>> = final_coords
+            .par_iter()
+            .map_init(|| domain::Searcher::new(&db), |searcher, &(l1s, l1e, l2s, l2e)| {
+                [&text[l1s..=l1e], &text[l2s..=l2e]]
+                    .iter()
+                    .flat_map(|ltr| searcher.search(&db, ltr, num_targets, args.domain_evalue).map(|c| c.ltr_order_hits()).unwrap_or_default())
+                    .collect()
+            })
+            .collect();
+        eprintln!(
+            "Phase 3f: {} candidate(s) with an LTR-list domain hit inside an LTR, {} with a core polyprotein domain ({:.1}s elapsed)",
+            out.iter().filter(|v| !v.is_empty()).count(),
+            out.iter().filter(|v| v.iter().any(|h| domain::is_core(h))).count(),
+            t_start.elapsed().as_secs_f64(),
+        );
+        out
+    } else {
+        vec![Vec::new(); surviving.len()]
     };
 
     // ---- Phase 3f2: LTR self-alignment (tandem-repeat check) ----
@@ -601,25 +663,27 @@ where
         .zip(domain_calls.iter())
         .zip(internal_stats.iter())
         .zip(self_cov.iter())
-        .map(|(((((c, _), &(l1s, _, _, l2e)), dc), ist), &(sc_l, sc_r))| {
+        .zip(ltr_domain_hits.iter())
+        .map(|((((((c, _), &(l1s, _, _, l2e)), dc), ist), &(sc_l, sc_r)), ldh)| {
             let seq_off = seq_starts[c.seq_num];
             let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
-            let tsd = features::tsd_at(text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
+            let tsd = features::tsd_or_mm1(text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
             let motif = features::motif_at(text, l1s, l2e);
             decide::decide(
                 args.keep,
                 args.internal_gap_max,
                 args.tandem_max,
-                &decide::Evidence { domain: dc.as_ref(), tsd_len: tsd.len, motif: &motif, gap_frac: ist.as_ref().map(|s| s.gap_frac), self_cov: sc_l.max(sc_r) },
+                &decide::Evidence { domain: dc.as_ref(), tsd_len: tsd.len, tsd_mm: tsd.mismatches, motif: &motif, gap_frac: ist.as_ref().map(|s| s.gap_frac), self_cov: sc_l.max(sc_r), ltr_domain_hits: ldh.iter().filter(|h| domain::is_core(h)).count() },
             )
         })
         .collect();
     let kept = decisions.iter().filter(|d| d.keep).count();
     let vetoed = decisions.iter().filter(|d| d.why.starts_with("veto:notLTR") || d.why.starts_with("veto:mixture")).count();
     let tandem = decisions.iter().filter(|d| d.why.starts_with("veto:tandem")).count();
+    let coding = decisions.iter().filter(|d| d.why.starts_with("veto:ltrdomain")).count();
     eprintln!(
-        "Phase 3g: kept {} of {} candidate(s) at --keep {:?}, {} vetoed by protein hits, {} by LTR self-repeat ({:.1}s elapsed)",
-        kept, decisions.len(), args.keep, vetoed, tandem, t_start.elapsed().as_secs_f64(),
+        "Phase 3g: kept {} of {} candidate(s) at --keep {:?}, {} vetoed by protein hits, {} by LTR self-repeat, {} by a domain inside an LTR ({:.1}s elapsed)",
+        kept, decisions.len(), args.keep, vetoed, tandem, coding, t_start.elapsed().as_secs_f64(),
     );
     if let Some(path) = &args.library {
         let mut out = std::io::BufWriter::new(std::fs::File::create(path).with_context(|| format!("creating {}", path))?);
@@ -635,6 +699,50 @@ where
         eprintln!("Wrote {} element(s) to {}", kept, path);
     }
 
+    // ---- Phase 3h: genome tRNA scan and PBS annotation ----
+    let want_pbs = args.format == OutputFormat::Tsv && !args.no_pbs_trna;
+    let pbs_calls: Vec<(Option<pbs::PbsHit>, Option<usize>)> = if want_pbs || args.trna_out.is_some() {
+        let t0 = std::time::Instant::now();
+        let ranges: Vec<(usize, usize)> = (0..seq_starts.len())
+            .map(|i| (seq_starts[i], seq_starts.get(i + 1).map(|&s| s - 1).unwrap_or(text.len() - 1)))
+            .collect();
+        let calls: Vec<Vec<trna::TrnaCall>> = ranges
+            .par_iter()
+            .map(|&(a, e)| trna::scan_sequence(&text[a..e], args.trna_intron_max))
+            .collect();
+        let n_calls: usize = calls.iter().map(|c| c.len()).sum();
+        let all: Vec<trna::TrnaCall> = calls.iter().flatten().cloned().collect();
+        let probes = pbs::Probes::from_calls(&all);
+        let out: Vec<(Option<pbs::PbsHit>, Option<usize>)> = if want_pbs || args.trna_out.is_some() {
+            surviving
+                .par_iter()
+                .zip(final_coords.par_iter())
+                .zip(domain_calls.par_iter())
+                .map(|(((c, _), &(_, l1e, l2s, _)), dc)| {
+                    let lo = seq_starts[c.seq_num];
+                    let hi = seq_starts.get(c.seq_num + 1).map(|&s| s - 2).unwrap_or(text.len() - 2);
+                    let strand = if args.pbs_domain_strand { dc.as_ref().map(|d| d.strand.as_str()).unwrap_or("?") } else { "?" };
+                    probes.annotate(text, l1e, l2s, lo, hi, strand)
+                })
+                .collect()
+        } else {
+            vec![(None, None); surviving.len()]
+        };
+        eprintln!(
+            "Phase 3h: {} tRNA gene(s), {} PBS probe(s) ({:.1}s); {} candidate(s) with a 12-nt PBS, {} exact ({:.1}s elapsed)",
+            n_calls, probes.len(), t0.elapsed().as_secs_f64(),
+            out.iter().filter(|(h, _)| h.is_some()).count(),
+            out.iter().filter(|(h, _)| h.as_ref().map_or(false, |h| h.mm12 == 0)).count(),
+            t_start.elapsed().as_secs_f64(),
+        );
+        if let Some(path) = &args.trna_out {
+            write_trna_library(path, &seq_names, &calls, &out, &decisions)?;
+        }
+        out
+    } else {
+        vec![(None, None); surviving.len()]
+    };
+
     eprintln!(
         "Phase 4: {} candidate(s) with TSD, {} with outer motif, {} with inner motif ({:.1}s elapsed)",
         surviving.iter().filter(|(_, t)| t.has_tsd).count(),
@@ -648,7 +756,7 @@ where
         OutputFormat::Gt => {
             println!(
                 "# args=-index {} -seed {} -minlenltr {} -maxlenltr {} -mindistltr {} -maxdistltr {} -similar {} -xdrop {} -mintsd {} -maxtsd {} -overlaps {}{}",
-                args.sufr,
+                sufr,
                 args.min_seed, args.ltr_min, args.ltr_max,
                 args.dist_min, args.dist_max,
                 args.similar as u32, args.xdrop,
@@ -699,11 +807,12 @@ where
                 "seq\telem_start\telem_end\telem_len\tlltr_start\tlltr_end\tlltr_len\trltr_start\trltr_end\trltr_len\tidentity\t\
                  xdrop_lltr_start\txdrop_lltr_end\txdrop_rltr_start\txdrop_rltr_end\txdrop_similarity\t\
                  reextended\taln_score\taln_columns\ttrim_l5\ttrim_r5\ttrim_l3\ttrim_r3\twindow_edge\t\
-                 tsd_len\ttsd_seq\ttsd_shift_l\ttsd_shift_r\tmotif\tppt_purines15\tppt_offset\tpbs_offset\tn_count\txdrop_tsd_len\t\
+                 tsd_len\ttsd_seq\ttsd_shift_l\ttsd_shift_r\tmotif\tmotif_class\tppt_purines15\tppt_offset\tpbs_offset\tn_count\txdrop_tsd_len\t\
                  int_tiles\tint_multi_frac\tint_gap_frac\tint_gap_bp\t\
-                 dom_order\tdom_superfamily\tdom_strand\tdom_best_e\tdom_hits\tlltr_self_cov\trltr_self_cov\tkeep\tevidence"
+                 dom_order\tdom_superfamily\tdom_strand\tdom_best_e\tdom_hits\tltr_dom_hits\tlltr_self_cov\trltr_self_cov\tkeep\tevidence\t\
+                 pbs_trna\tpbs_mm12\tpbs_edist18\tpbs_strand\ttsd_mm\tdom_pos\tdom_nest"
             );
-            for ((((((c, ti), re), ist), dc), dec), &(sc_l, sc_r)) in surviving.iter().zip(reext.iter()).zip(internal_stats.iter()).zip(domain_calls.iter()).zip(decisions.iter()).zip(self_cov.iter()) {
+            for ((((((((c, ti), re), ist), dc), dec), &(sc_l, sc_r)), ldh), (pbs_hit, pbs_ed)) in surviving.iter().zip(reext.iter()).zip(internal_stats.iter()).zip(domain_calls.iter()).zip(decisions.iter()).zip(self_cov.iter()).zip(ltr_domain_hits.iter()).zip(pbs_calls.iter()) {
                 let seq_off = seq_starts.get(c.seq_num).copied().unwrap_or(0);
                 let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
                 let rel1 = |abs: usize| abs - seq_off + 1;
@@ -711,10 +820,15 @@ where
                     Some(r) => (r.left_ltr_start, r.left_ltr_end, r.right_ltr_start, r.right_ltr_end, r.identity),
                     None => (ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end, c.similarity),
                 };
-                let tsd = features::tsd_at(&text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
+                let tsd = features::tsd_or_mm1(&text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
                 let motif = features::motif_at(&text, l1s, l2e);
                 let (ppt_n, ppt_off) = features::ppt(&text, l2s, seq_off);
-                let pbs_off = features::pbs(&text, l1e, seq_end);
+                let pbs_off = pbs_hit.as_ref().map_or(-1, |h| h.offset);
+                let (pbs_trna, pbs_mm, pbs_strand) = match pbs_hit {
+                    Some(h) => (h.trnas.join("/"), h.mm12.to_string(), if h.minus { "-" } else { "+" }),
+                    None => (".".to_string(), ".".to_string(), "."),
+                };
+                let pbs_ed = pbs_ed.map_or(".".to_string(), |d| d.to_string());
                 let ns = features::n_count(&text, l1s, l2e);
                 let name = seq_names.get(c.seq_num).map(|s| s.as_str()).unwrap_or("?");
                 let (reextended, score, cols, tr, edge) = match re {
@@ -725,18 +839,26 @@ where
                     Some(d) => {
                         let best = d.hits.iter().map(|h| h.e_value).fold(f64::INFINITY, f64::min);
                         let list = if d.hits.is_empty() { ".".to_string() } else {
-                            d.hits.iter().map(|h| format!("{}:{:.1e}:{}", h.accession, h.e_value, ["aa1","aa2","aa3","rev_aa1","rev_aa2","rev_aa3"][h.frame])).collect::<Vec<_>>().join(",")
+                            d.hits.iter().map(|h| format!("{}:{:.1e}:{}", h.accession, h.e_value, domain::FRAME_NAMES[h.frame])).collect::<Vec<_>>().join(",")
                         };
                         (d.order.clone(), d.superfamily.clone(), d.strand.clone(), if best.is_finite() { format!("{:.1e}", best) } else { ".".into() }, list)
                     }
                     None => (".".into(), ".".into(), ".".into(), ".".into(), ".".into()),
+                };
+                // hit positions (genome coordinates, 1-based) and the nesting call
+                let (dpos, dnest) = match dc {
+                    Some(d) if !d.hits.is_empty() => (
+                        d.hits.iter().map(|h| format!("{}:{}:{}-{}", h.accession, domain::FRAME_NAMES[h.frame], rel1(d.origin + h.start), rel1(d.origin + h.end - 1))).collect::<Vec<_>>().join(","),
+                        domain::nesting(d).unwrap_or(".").to_string(),
+                    ),
+                    _ => (".".to_string(), ".".to_string()),
                 };
                 let (it, imf, igf, igb) = match ist {
                     Some(s) => (s.tiles.to_string(), format!("{:.3}", s.multi_frac), format!("{:.3}", s.gap_frac), s.gap_bp.to_string()),
                     None => (".".into(), ".".into(), ".".into(), ".".into()),
                 };
                 println!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     name, rel1(l1s), rel1(l2e), l2e - l1s + 1,
                     rel1(l1s), rel1(l1e), l1e - l1s + 1,
                     rel1(l2s), rel1(l2e), l2e - l2s + 1,
@@ -744,11 +866,12 @@ where
                     rel1(ti.left_ltr_start), rel1(ti.left_ltr_end), rel1(ti.right_ltr_start), rel1(ti.right_ltr_end), c.similarity,
                     reextended, score, cols, tr.0, tr.1, tr.2, tr.3, edge,
                     tsd.len, if tsd.len > 0 { tsd.seq.as_str() } else { "." }, tsd.shift_left, tsd.shift_right,
-                    motif, ppt_n, ppt_off, pbs_off, ns, ti.tsd_len,
+                    motif, features::motif_class(&motif), ppt_n, ppt_off, pbs_off, ns, ti.tsd_len,
                     it, imf, igf, igb,
-                    dord, dsf, dstr, dbe, dhits,
+                    dord, dsf, dstr, dbe, dhits, if ldh.is_empty() { ".".to_string() } else { ldh.join(",") },
                     sc_l, sc_r,
                     dec.keep as u8, dec.why,
+                    pbs_trna, pbs_mm, pbs_ed, pbs_strand, tsd.mismatches, dpos, dnest,
                 );
             }
         }
@@ -758,9 +881,110 @@ where
 }
 
 // --------------------------------------------------
+/// Write tRNA calls as a table: 1-based coordinates within the sequence,
+/// start <= end, strand, ARAGORN name, intron length, score, gene sequence.
+fn write_trna_calls(
+    out: &mut impl std::io::Write,
+    names: &[String],
+    calls: &[Vec<trna::TrnaCall>],
+    ids: Option<&std::collections::HashMap<&str, &str>>,
+) -> Result<()> {
+    writeln!(out, "seq\tstart\tend\tstrand\tname\tlength\tintron\tscore\tsequence{}", if ids.is_some() { "\tlibrary_id" } else { "" })?;
+    for (name, cs) in names.iter().zip(calls) {
+        for c in cs {
+            write!(
+                out,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{}",
+                name, c.start, c.end, if c.minus { '-' } else { '+' }, c.name, c.seq.len(), c.intron_len, c.energy, c.seq,
+            )?;
+            if let Some(ids) = ids {
+                write!(out, "\t{}", ids.get(c.seq.as_str()).unwrap_or(&"."))?;
+            }
+            writeln!(out)?;
+        }
+    }
+    Ok(())
+}
+
+// --------------------------------------------------
+/// `--trna-out`: the tRNA library (FASTA, one entry per distinct gene
+/// sequence, annotated with PBS usage), every call in `<FILE>.tsv`, and the
+/// top primers on stderr.
+fn write_trna_library(
+    path: &str,
+    names: &[String],
+    calls: &[Vec<trna::TrnaCall>],
+    hits: &[(Option<pbs::PbsHit>, Option<usize>)],
+    decisions: &[decide::Decision],
+) -> Result<()> {
+    let flat: Vec<(&str, &trna::TrnaCall)> =
+        names.iter().zip(calls).flat_map(|(n, cs)| cs.iter().map(move |c| (n.as_str(), c))).collect();
+    let usage: Vec<(Option<&pbs::PbsHit>, bool)> = hits.iter().zip(decisions).map(|((h, _), d)| (h.as_ref(), d.keep)).collect();
+    let lib = pbs::build_library(&flat, &usage);
+    let mut out = std::io::BufWriter::new(std::fs::File::create(path).with_context(|| format!("creating {}", path))?);
+    pbs::write_library_fasta(&mut out, &lib)?;
+    std::io::Write::flush(&mut out)?;
+    let ids: std::collections::HashMap<&str, &str> = lib.iter().map(|e| (e.seq.as_str(), e.id.as_str())).collect();
+    let tsv = format!("{}.tsv", path);
+    let mut out = std::io::BufWriter::new(std::fs::File::create(&tsv).with_context(|| format!("creating {}", tsv))?);
+    write_trna_calls(&mut out, names, calls, Some(&ids))?;
+    std::io::Write::flush(&mut out)?;
+    // Top primers by tRNA type: kept elements whose best hit names the type.
+    let mut by_type: std::collections::HashMap<&str, [usize; 2]> = std::collections::HashMap::new();
+    for (h, keep) in &usage {
+        if let (Some(h), true) = (h, keep) {
+            for t in &h.trnas {
+                by_type.entry(t.as_str()).or_default()[(h.mm12.min(1)) as usize] += 1;
+            }
+        }
+    }
+    let mut top: Vec<(&str, [usize; 2])> = by_type.into_iter().collect();
+    top.sort_by(|a, b| (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1])).then(a.0.cmp(b.0)));
+    eprintln!(
+        "tRNA library: {} distinct gene sequence(s) from {} call(s) written to {} (calls in {}); top primers of kept elements: {}",
+        lib.len(), flat.len(), path, tsv,
+        top.iter().take(8).map(|(t, c)| format!("{} {} ({} exact)", t, c[0] + c[1], c[0])).collect::<Vec<_>>().join(", "),
+    );
+    Ok(())
+}
+
+// --------------------------------------------------
+/// `--trna-scan`: tRNA genes of every sequence in a FASTA file.
+fn trna_scan_fasta(path: &str, args: &Args) -> Result<()> {
+    if args.threads > 0 {
+        rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global().ok();
+    }
+    let t0 = std::time::Instant::now();
+    let text = std::fs::read(path).with_context(|| format!("reading {}", path))?;
+    let mut names: Vec<String> = Vec::new();
+    let mut seqs: Vec<Vec<u8>> = Vec::new();
+    for line in text.split(|&b| b == b'\n') {
+        if let Some(h) = line.strip_prefix(b">") {
+            let h = String::from_utf8_lossy(h);
+            names.push(h.split_whitespace().next().unwrap_or("").to_string());
+            seqs.push(Vec::new());
+        } else if let Some(s) = seqs.last_mut() {
+            s.extend(line.iter().copied().filter(|b| !b.is_ascii_whitespace()));
+        }
+    }
+    let calls: Vec<Vec<trna::TrnaCall>> = seqs.par_iter().map(|s| trna::scan_sequence(s, args.trna_intron_max)).collect();
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    write_trna_calls(&mut out, &names, &calls, None)?;
+    std::io::Write::flush(&mut out)?;
+    eprintln!(
+        "tRNA scan: {} sequence(s), {} bp, {} gene(s) in {:.1}s",
+        seqs.len(), seqs.iter().map(|s| s.len()).sum::<usize>(), calls.iter().map(|c| c.len()).sum::<usize>(), t0.elapsed().as_secs_f64(),
+    );
+    Ok(())
+}
+
+// --------------------------------------------------
 fn main() -> Result<()> {
     let args = Args::parse();
-    let text_len = read_text_length(&args.sufr)?;
+    if let Some(fasta) = &args.trna_scan {
+        return trna_scan_fasta(fasta, &args);
+    }
+    let text_len = read_text_length(args.sufr.as_deref().context("a SUFR index is required")?)?;
     if text_len < u32::MAX as usize {
         run::<u32>(&args)
     } else {

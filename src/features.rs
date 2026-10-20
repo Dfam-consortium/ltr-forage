@@ -13,9 +13,12 @@
 /// side; length 0 when nothing of at least `min_len` is found.
 pub struct Tsd {
     pub len: usize,
+    /// The left copy (the right copy differs from it when `mismatches` is 1).
     pub seq: String,
     pub shift_left: usize,
     pub shift_right: usize,
+    /// 0 for an exact repeat; 1 for the fallback in `tsd_or_mm1`.
+    pub mismatches: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -29,7 +32,7 @@ pub fn tsd_at(
     max_len: usize,
     slack: usize,
 ) -> Tsd {
-    let mut best = Tsd { len: 0, seq: String::new(), shift_left: 0, shift_right: 0 };
+    let mut best = Tsd { len: 0, seq: String::new(), shift_left: 0, shift_right: 0, mismatches: 0 };
     for dl in 0..=slack {
         for dr in 0..=slack {
             // Left repeat occupies [L - dl - k, L - dl); right repeat [R + 1 + dr, R + 1 + dr + k).
@@ -53,6 +56,7 @@ pub fn tsd_at(
                         seq: String::from_utf8_lossy(a).into_owned(),
                         shift_left: dl,
                         shift_right: dr,
+                        mismatches: 0,
                     };
                     break;
                 }
@@ -60,6 +64,44 @@ pub fn tsd_at(
         }
     }
     best
+}
+
+/// `tsd_at`, and when it finds nothing, a 6 or 5 bp repeat with one
+/// mismatch lying directly against both LTR ends (no play).  A TSD picks up
+/// point mutations after insertion like any other sequence: in lotus, 20% of
+/// TG..CA elements with no exact TSD have one at the LTR ends, against 1% in
+/// flanks shifted 37 bp out.  Allowing play as well would raise that
+/// background several-fold, so the fallback is fixed in place.
+#[allow(clippy::too_many_arguments)]
+pub fn tsd_or_mm1(
+    text: &[u8],
+    left_ltr_start: usize,
+    right_ltr_end: usize,
+    seq_start: usize,
+    seq_end: usize,
+    min_len: usize,
+    max_len: usize,
+    slack: usize,
+) -> Tsd {
+    let t = tsd_at(text, left_ltr_start, right_ltr_end, seq_start, seq_end, min_len, max_len, slack);
+    if t.len > 0 {
+        return t;
+    }
+    let acgt = |c: &u8| matches!(c, b'A' | b'C' | b'G' | b'T');
+    for k in [6usize, 5] {
+        if left_ltr_start < seq_start + k || right_ltr_end + k > seq_end {
+            continue;
+        }
+        let a = &text[left_ltr_start - k..left_ltr_start];
+        let b = &text[right_ltr_end + 1..right_ltr_end + 1 + k];
+        if !a.iter().chain(b).all(acgt) {
+            continue;
+        }
+        if a.iter().zip(b).filter(|(x, y)| x != y).count() == 1 {
+            return Tsd { len: k, seq: String::from_utf8_lossy(a).into_owned(), shift_left: 0, shift_right: 0, mismatches: 1 };
+        }
+    }
+    t
 }
 
 /// The first two bases of the left LTR and the last two of the right LTR,
@@ -70,6 +112,17 @@ pub fn motif_at(text: &[u8], left_ltr_start: usize, right_ltr_end: usize) -> Str
         s.push(*text.get(i).unwrap_or(&b'N') as char);
     }
     s
+}
+
+/// LTR_retriever's reading of the terminal motif: `TGCA` for the canonical
+/// termini, `known` for the other dinucleotide pairs its rules accept
+/// (TGCT, TACA, TACT, TGGA, TGGT, TATA, TGTA, TGCC), `other` for the rest.
+pub fn motif_class(motif: &str) -> &'static str {
+    match motif {
+        "TGCA" => "TGCA",
+        "TGCT" | "TACA" | "TACT" | "TGGA" | "TGGT" | "TATA" | "TGTA" | "TGCC" => "known",
+        _ => "other",
+    }
 }
 
 /// Polypurine tract candidate: the most purine-rich 15 bp window in the 30
@@ -90,19 +143,6 @@ pub fn ppt(text: &[u8], right_ltr_start: usize, seq_start: usize) -> (usize, i64
     best
 }
 
-/// Primer binding site candidate: offset of the first TGG (the complement of
-/// a tRNA's CCA end) within 20 bp after the left LTR, or -1.
-pub fn pbs(text: &[u8], left_ltr_end: usize, seq_end: usize) -> i64 {
-    let lo = left_ltr_end + 1;
-    let hi = (left_ltr_end + 20).min(seq_end);
-    if hi < lo + 2 {
-        return -1;
-    }
-    (lo..=hi - 2)
-        .find(|&i| &text[i..i + 3] == b"TGG")
-        .map_or(-1, |i| (i - lo) as i64)
-}
-
 /// Count of N in the element.
 pub fn n_count(text: &[u8], start: usize, end: usize) -> usize {
     text[start..=end].iter().filter(|&&c| c == b'N').count()
@@ -111,6 +151,14 @@ pub fn n_count(text: &[u8], start: usize, end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn motif_classes() {
+        assert_eq!(motif_class("TGCA"), "TGCA");
+        assert_eq!(motif_class("TACA"), "known");
+        assert_eq!(motif_class("TGAA"), "other");
+        assert_eq!(motif_class("NNNN"), "other");
+    }
 
     #[test]
     fn tsd_found_with_slack() {
@@ -131,14 +179,32 @@ mod tests {
     }
 
     #[test]
-    fn motif_and_ppt_and_pbs() {
+    fn tsd_one_mismatch_fallback() {
+        //            0123456789012345678901234567890
+        let text = b"CCCAGGATTGXXXXXXXXXXCAAAGATCCC";
+        // Element 8..21 (TG ... CA); flanks AGGAT / AAGAT differ at one base.
+        let t = tsd_at(text, 8, 21, 0, text.len() - 1, 4, 20, 1);
+        assert_eq!(t.len, 0);
+        let t = tsd_or_mm1(text, 8, 21, 0, text.len() - 1, 4, 20, 1);
+        assert_eq!((t.len, t.mismatches, t.seq.as_str()), (5, 1, "AGGAT"));
+        // Two mismatches: nothing.
+        let text = b"CCCCTGATTGXXXXXXXXXXCAAAGATCCC";
+        let t = tsd_or_mm1(text, 8, 21, 0, text.len() - 1, 4, 20, 1);
+        assert_eq!(t.len, 0);
+        // An exact TSD wins and reports no mismatch.
+        let text = b"CCCAAGATTGXXXXXXXXXXCAAAGATCCC";
+        let t = tsd_or_mm1(text, 8, 21, 0, text.len() - 1, 4, 20, 1);
+        assert_eq!((t.len, t.mismatches), (5, 0));
+    }
+
+    #[test]
+    fn motif_and_ppt() {
         //            0123456789012345678901234567890123
         let text = b"AAAATGCCCTGGAAAAAAAAAAAAAAAGGGCAAAA";
         assert_eq!(motif_at(text, 4, 31), "TGCA");
         let (n, off) = ppt(text, 32, 0);
         assert!(n >= 13);
         assert!(off < 0);
-        assert_eq!(pbs(text, 8, text.len() - 1), 0);
         assert_eq!(n_count(text, 0, text.len() - 1), 0);
     }
 }

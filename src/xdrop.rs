@@ -13,6 +13,15 @@
 ///   backward (equivalent to passing reversed slices and extending right).
 
 // --------------------------------------------------
+/// True if `a` and `b` are the same nucleotide.  N and any other non-ACGT
+/// byte never match, not even itself (GenomeTools encodes wildcards as unique
+/// special characters), so assembly gaps cannot align to each other.
+#[inline]
+pub fn same_base(a: u8, b: u8) -> bool {
+    a == b && matches!(a, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't')
+}
+
+// --------------------------------------------------
 /// Alignment scores. Defaults match LTRHarvest's defaults.
 #[derive(Clone, Copy, Debug)]
 pub struct XdropScores {
@@ -97,13 +106,13 @@ fn set_front(fronts: &mut Vec<i64>, d: i64, k: i64, val: i64) {
 fn seq_lcp(u: &[u8], v: &[u8], i: usize, j: usize, forward: bool) -> usize {
     let mut n = 0;
     if forward {
-        while i + n < u.len() && j + n < v.len() && u[i + n] == v[j + n] {
+        while i + n < u.len() && j + n < v.len() && same_base(u[i + n], v[j + n]) {
             n += 1;
         }
     } else {
         let ubase = u.len().saturating_sub(1 + i);
         let vbase = v.len().saturating_sub(1 + j);
-        while n <= ubase && n <= vbase && u[ubase - n] == v[vbase - n] {
+        while n <= ubase && n <= vbase && same_base(u[ubase - n], v[vbase - n]) {
             n += 1;
         }
     }

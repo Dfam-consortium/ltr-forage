@@ -65,9 +65,14 @@ impl Aligner {
             gap_extend: 5,
             matrix_name: "comparison.matrix".to_string(),
             word_size: 14,
+            // RepeatMasker's translation of a minimum score of 200: twice
+            // it for the ungapped X-drop, half for the preliminary gapped
+            // one, four times for the final gapped alignment.  A final
+            // X-drop of 200 cut divergent 3 kb LTR pairs to a few hundred
+            // bases on rice.
             xdrop_ungap: 400,
             xdrop_gap: 100,
-            xdrop_gap_final: 200,
+            xdrop_gap_final: 800,
             min_raw_gapped_score: 200,
             ungapped_cutoff: None,
             complexity_adjust: true,

@@ -4,9 +4,9 @@
 //! protein hits are of not-LTR or mixed order; the levels differ in what
 //! counts as positive evidence.  Measured against RepeatMasker (section 12
 //! of the analysis document): on hg38 an LTR-order domain hit alone is 89%
-//! precise at 68% recall; the TG..CA motif with a 5 bp TSD adds few
-//! elements on human but is 98% precise in rice; a TSD alone lets in many
-//! chance pairs.
+//! precise at 68% recall; the TG..CA motif with a TSD of 4 bp or more adds
+//! a few elements on every genome (human ERVs mostly make 4 bp TSDs, plant
+//! Gypsy and Copia 5 bp); a TSD alone lets in many chance pairs.
 
 use std::fmt::Write as _;
 use std::io::Write;
@@ -19,9 +19,9 @@ use crate::domain::DomainCall;
 pub enum KeepLevel {
     /// An LTR-order domain hit
     Domain,
-    /// A domain hit, or the TG..CA motif with a TSD of 5 bp or more
+    /// A domain hit, or the TG..CA motif with a TSD of 4 bp or more
     Standard,
-    /// A domain hit, a TSD of 5 bp or more, or TG..CA with a 4 bp TSD
+    /// A domain hit, a TSD of 5 bp or more, or TG..CA with a TSD of 4 bp or more
     Loose,
     /// Everything the veto does not reject
     None,
@@ -30,6 +30,10 @@ pub enum KeepLevel {
 pub struct Evidence<'a> {
     pub domain: Option<&'a DomainCall>,
     pub tsd_len: usize,
+    /// 1 when the TSD is the one-mismatch fallback (`features::tsd_or_mm1`).
+    /// It counts only alongside TG..CA: elsewhere it is no commoner than
+    /// in random flanks.
+    pub tsd_mm: usize,
     pub motif: &'a str,
     /// Longest single-copy stretch of the internal region as a fraction of
     /// its tiles, when `--internal-stats` ran.
@@ -39,6 +43,11 @@ pub struct Evidence<'a> {
     /// LTRs with tandem sub-repeats (LTR12 in human) reach 0.8 to 0.98,
     /// while satellite monomers and Alu dimers reach 1.0.
     pub self_cov: f64,
+    /// LTR-order domain hits found inside either LTR.  An LTR does not
+    /// encode the polyprotein; a hit there means the "LTR" is internal
+    /// sequence (two adjacent copies of one family called as one element,
+    /// or a boundary that landed in the coding region).
+    pub ltr_domain_hits: usize,
 }
 
 pub struct Decision {
@@ -58,21 +67,25 @@ pub fn decide(level: KeepLevel, gap_max: Option<f64>, tandem_max: f64, ev: &Evid
         write!(why, "veto:tandem{:.2}", ev.self_cov).unwrap();
         return Decision { keep: false, why };
     }
+    if ev.ltr_domain_hits > 0 {
+        write!(why, "veto:ltrdomain{}", ev.ltr_domain_hits).unwrap();
+        return Decision { keep: false, why };
+    }
     let dom = order == "LTR";
     let tgca = ev.motif == "TGCA";
     if dom {
         write!(why, "domain").unwrap();
     }
     if ev.tsd_len > 0 {
-        write!(why, "{}tsd{}", if why.is_empty() { "" } else { "," }, ev.tsd_len).unwrap();
+        write!(why, "{}tsd{}{}", if why.is_empty() { "" } else { "," }, ev.tsd_len, if ev.tsd_mm > 0 { "mm1" } else { "" }).unwrap();
     }
     if tgca {
         write!(why, "{}tgca", if why.is_empty() { "" } else { "," }).unwrap();
     }
     let positive = match level {
         KeepLevel::Domain => dom,
-        KeepLevel::Standard => dom || (tgca && ev.tsd_len >= 5),
-        KeepLevel::Loose => dom || ev.tsd_len >= 5 || (tgca && ev.tsd_len >= 4),
+        KeepLevel::Standard => dom || (tgca && ev.tsd_len >= 4),
+        KeepLevel::Loose => dom || (ev.tsd_len >= 5 && ev.tsd_mm == 0) || (tgca && ev.tsd_len >= 4),
         KeepLevel::None => true,
     };
     if !positive {
@@ -132,12 +145,14 @@ mod tests {
         let ltr = call("LTR");
         let not = call("notLTR");
         fn ev<'a>(d: Option<&'a DomainCall>, tsd: usize, motif: &'a str) -> Evidence<'a> {
-            Evidence { domain: d, tsd_len: tsd, motif, gap_frac: None, self_cov: 0.0 }
+            Evidence { domain: d, tsd_len: tsd, tsd_mm: 0, motif, gap_frac: None, self_cov: 0.0, ltr_domain_hits: 0 }
         }
         assert!(decide(KeepLevel::Domain, None, 0.5, &ev(Some(&ltr), 0, "AAAA")).keep);
         assert!(!decide(KeepLevel::None, None, 0.5, &ev(Some(&not), 6, "TGCA")).keep);
         assert!(!decide(KeepLevel::Domain, None, 0.5, &ev(None, 6, "TGCA")).keep);
         assert!(decide(KeepLevel::Standard, None, 0.5, &ev(None, 5, "TGCA")).keep);
+        assert!(decide(KeepLevel::Standard, None, 0.5, &ev(None, 4, "TGCA")).keep);
+        assert!(!decide(KeepLevel::Standard, None, 0.5, &ev(None, 3, "TGCA")).keep);
         assert!(!decide(KeepLevel::Standard, None, 0.5, &ev(None, 5, "TGAA")).keep);
         assert!(decide(KeepLevel::Loose, None, 0.5, &ev(None, 5, "TGAA")).keep);
         assert!(decide(KeepLevel::Loose, None, 0.5, &ev(None, 4, "TGCA")).keep);
@@ -151,7 +166,7 @@ mod tests {
     #[test]
     fn tandem_veto() {
         let ltr = call("LTR");
-        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, motif: "TGCA", gap_frac: None, self_cov: 0.8 };
+        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, tsd_mm: 0, motif: "TGCA", gap_frac: None, self_cov: 0.8, ltr_domain_hits: 0 };
         let d = decide(KeepLevel::None, None, 0.5, &ev);
         assert!(!d.keep);
         assert_eq!(d.why, "veto:tandem0.80");
@@ -159,9 +174,18 @@ mod tests {
     }
 
     #[test]
+    fn ltr_domain_veto() {
+        let ltr = call("LTR");
+        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, tsd_mm: 0, motif: "TGCA", gap_frac: None, self_cov: 0.0, ltr_domain_hits: 2 };
+        let d = decide(KeepLevel::None, None, 0.99, &ev);
+        assert!(!d.keep);
+        assert_eq!(d.why, "veto:ltrdomain2");
+    }
+
+    #[test]
     fn gap_filter_applies_only_when_measured() {
         let ltr = call("LTR");
-        let mut ev = Evidence { domain: Some(&ltr), tsd_len: 0, motif: "TGCA", gap_frac: Some(0.3), self_cov: 0.0 };
+        let mut ev = Evidence { domain: Some(&ltr), tsd_len: 0, tsd_mm: 0, motif: "TGCA", gap_frac: Some(0.3), self_cov: 0.0, ltr_domain_hits: 0 };
         assert!(!decide(KeepLevel::Domain, Some(0.1), 0.5, &ev).keep);
         assert!(decide(KeepLevel::Domain, None, 0.5, &ev).keep);
         ev.gap_frac = None;

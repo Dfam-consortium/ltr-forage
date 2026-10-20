@@ -331,6 +331,11 @@ pub struct DomainHit {
     pub frame: usize,
     pub bits: f32,
     pub e_value: f64,
+    /// Where the seeding diagonal lies, as 0-based offsets into the searched
+    /// sequence on its forward strand (half-open).  Approximate: the best
+    /// ungapped diagonal, not the Forward alignment's own ends.
+    pub start: usize,
+    pub end: usize,
 }
 
 /// Counts of pairs entering each stage, for the run summary.
@@ -363,6 +368,74 @@ pub struct DomainCall {
     pub superfamily: String,
     /// +, - or ?
     pub strand: String,
+    /// Absolute text offset of the searched sequence's first base (set by
+    /// the caller), so hit positions can be reported in genome coordinates.
+    pub origin: usize,
+}
+
+impl DomainCall {
+    /// Hits to profiles in the LTR-order list, as `accession:E-value:frame`
+    /// strings.  Inside an LTR record a hit to one of the polyprotein
+    /// domains means the record is coding sequence, not an LTR; some
+    /// profiles on the list (DUF1263 and its relatives) do occur inside
+    /// LTRs, so the caller decides which accessions count.
+    pub fn ltr_order_hits(&self) -> Vec<String> {
+        let ltr: HashSet<&str> = LTR.iter().copied().collect();
+        self.hits
+            .iter()
+            .filter(|h| ltr.contains(h.accession.as_str()))
+            .map(|h| format!("{}:{:.1e}:{}", h.accession, h.e_value, FRAME_NAMES[h.frame]))
+            .collect()
+    }
+}
+
+pub const FRAME_NAMES: [&str; 6] = ["aa1", "aa2", "aa3", "rev_aa1", "rev_aa2", "rev_aa3"];
+
+/// Polyprotein domains that decide the veto: a hit to one of these inside an
+/// LTR means the "LTR" is internal sequence.  The rest of the LTR list
+/// (DUF834 and DUF1263 above all) turns up inside real LTRs: 748 annotated
+/// LTR pairs on rice.
+pub const CORE: &[&str] = &[
+    "PF00665", "PF13683", // integrase core
+    "PF03732", "PF14223", "PF14244", "PF13976", // gag, gag-pre-integrase
+    "PF07727", // reverse transcriptase (copia)
+    "PF13650", "PF13975", "PF09668", "PF00077", "PF08284", "PF02160", "PF12384", // aspartyl proteases
+    "PF00385", // chromo
+];
+
+pub fn is_core(hit: &str) -> bool {
+    CORE.iter().any(|a| hit.starts_with(a))
+}
+
+/// E-value a core hit needs before it counts as evidence of nesting.
+pub const NEST_MAX_E: f64 = 1e-5;
+/// Distance between two hits of one core profile on one strand that marks
+/// the domain as duplicated rather than split across frames by a frameshift.
+pub const NEST_DUP_GAP: usize = 1000;
+
+/// Signs that a candidate is two elements, one inside the other, read from
+/// its core polyprotein hits (`CORE`, E <= `NEST_MAX_E`): `opp` when there
+/// are core hits on both strands, `dup` when one core profile hits twice on
+/// one strand at least `NEST_DUP_GAP` bp apart.  A single element encodes
+/// each core domain once, on one strand.  None when neither holds.
+pub fn nesting(call: &DomainCall) -> Option<&'static str> {
+    let core: Vec<&DomainHit> = call.hits.iter().filter(|h| is_core(&h.accession) && h.e_value <= NEST_MAX_E).collect();
+    let plus = core.iter().any(|h| h.frame < 3);
+    let minus = core.iter().any(|h| h.frame >= 3);
+    if plus && minus {
+        return Some("opp");
+    }
+    for (i, a) in core.iter().enumerate() {
+        for b in &core[i + 1..] {
+            if a.accession == b.accession && (a.frame < 3) == (b.frame < 3) {
+                let gap = if a.start >= b.end { a.start - b.end } else if b.start >= a.end { b.start - a.end } else { 0 };
+                if gap >= NEST_DUP_GAP {
+                    return Some("dup");
+                }
+            }
+        }
+    }
+    None
 }
 
 /// nail's Forward filter threshold (its CLI default).
@@ -415,7 +488,13 @@ impl Searcher {
                 let Some((bits, e)) = scored else { continue };
                 stats.forward_passed += 1;
                 if e <= max_e {
-                    hits.push(DomainHit { accession: entry.accession.clone(), name: entry.name.clone(), frame: fi, bits, e_value: e });
+                    // amino acid t (1-based) of frame fi covers strand bases
+                    // fi%3 + 3(t-1) .. fi%3 + 3t; the reverse frames are read on
+                    // the reverse complement
+                    let o = fi % 3;
+                    let (a, b) = (o + 3 * (seed.seq_start - 1), (o + 3 * seed.seq_end).min(seq.len()));
+                    let (start, end) = if fi < 3 { (a, b) } else { (seq.len() - b, seq.len() - a) };
+                    hits.push(DomainHit { accession: entry.accession.clone(), name: entry.name.clone(), frame: fi, bits, e_value: e, start, end });
                 }
             }
         }
@@ -464,7 +543,7 @@ fn score_pair(
 
 fn classify(hits: Vec<DomainHit>) -> DomainCall {
     if hits.is_empty() {
-        return DomainCall { stats: SearchStats::default(), hits, order: "none".into(), superfamily: "unknown".into(), strand: "?".into() };
+        return DomainCall { hits, order: "none".into(), superfamily: "unknown".into(), strand: "?".into(), ..Default::default() };
     }
     let ltr: HashSet<&str> = LTR.iter().copied().collect();
     let not_ltr: HashSet<&str> = NOT_LTR.iter().copied().collect();
@@ -498,7 +577,7 @@ fn classify(hits: Vec<DomainHit>) -> DomainCall {
     } else {
         "?"
     };
-    DomainCall { stats: SearchStats::default(), hits, order: order.unwrap_or("none").to_string(), superfamily: superfamily.into(), strand: strand.into() }
+    DomainCall { hits, order: order.unwrap_or("none").to_string(), superfamily: superfamily.into(), strand: strand.into(), ..Default::default() }
 }
 
 #[cfg(test)]
@@ -515,8 +594,26 @@ mod tests {
     }
 
     #[test]
+    fn nesting_rules() {
+        let mk = |acc: &str, frame: usize, start: usize, e: f64| DomainHit { accession: acc.into(), name: String::new(), frame, bits: 30.0, e_value: e, start, end: start + 300 };
+        let call = |h: Vec<DomainHit>| DomainCall { hits: h, ..Default::default() };
+        // one element: integrase and RT forward
+        assert_eq!(nesting(&call(vec![mk("PF00665", 0, 1000, 1e-20), mk("PF07727", 1, 3000, 1e-30)])), None);
+        // core domains on both strands
+        assert_eq!(nesting(&call(vec![mk("PF00665", 0, 1000, 1e-20), mk("PF07727", 4, 6000, 1e-30)])), Some("opp"));
+        // a weak opposite-strand hit does not count
+        assert_eq!(nesting(&call(vec![mk("PF00665", 0, 1000, 1e-20), mk("PF07727", 4, 6000, 1e-3)])), None);
+        // non-core hit on the other strand (accessory ORF) does not count
+        assert_eq!(nesting(&call(vec![mk("PF00665", 0, 1000, 1e-20), mk("PF03078", 4, 6000, 1e-30)])), None);
+        // integrase twice on one strand, 4 kb apart
+        assert_eq!(nesting(&call(vec![mk("PF00665", 0, 1000, 1e-20), mk("PF00665", 2, 5300, 1e-20)])), Some("dup"));
+        // two frames of one integrase (frameshift): adjacent, not duplicated
+        assert_eq!(nesting(&call(vec![mk("PF00665", 0, 1000, 1e-20), mk("PF00665", 2, 1200, 1e-20)])), None);
+    }
+
+    #[test]
     fn classification_rules() {
-        let mk = |acc: &str, frame: usize| DomainHit { accession: acc.into(), name: String::new(), frame, bits: 10.0, e_value: 1e-5 };
+        let mk = |acc: &str, frame: usize| DomainHit { accession: acc.into(), name: String::new(), frame, bits: 10.0, e_value: 1e-5, start: 0, end: 300 };
         let c = classify(vec![mk("PF00665", 0), mk("PF03732", 1)]);
         assert_eq!((c.order.as_str(), c.superfamily.as_str(), c.strand.as_str()), ("LTR", "Gypsy", "+"));
         let c = classify(vec![mk("PF00665", 0), mk("PF00078", 4)]);

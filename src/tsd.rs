@@ -11,6 +11,7 @@
 /// boundary; the default in GenomeTools is 60 bp.
 
 use crate::ltr::LtrCandidate;
+use crate::xdrop::same_base;
 
 // --------------------------------------------------
 /// Motif configuration (default: TG...CA).
@@ -99,6 +100,10 @@ fn find_exact_matches_sa(
     // This is the primary key for tie-breaking.
     for rpos in 0..=(rlen - min_len) {
         let pattern = &right[rpos..rpos + min_len];
+        // A TSD never contains a wildcard (GT: special characters match nothing).
+        if !pattern.iter().all(|&c| same_base(c, c)) {
+            continue;
+        }
 
         // Binary search for SA interval [lo, hi) where left[sa[k]..] shares
         // at least min_len characters with right[rpos..].  Mirrors GT's
@@ -116,7 +121,7 @@ fn find_exact_matches_sa(
             let lpos = sa[k];
 
             // Left-maximality check — GT's gt_mmsearch_isleftmaximal.
-            if lpos > 0 && rpos > 0 && left[lpos - 1] == right[rpos - 1] {
+            if lpos > 0 && rpos > 0 && same_base(left[lpos - 1], right[rpos - 1]) {
                 continue;
             }
 
@@ -124,7 +129,7 @@ fn find_exact_matches_sa(
             let mut ext = 0;
             while lpos + min_len + ext < llen
                 && rpos + min_len + ext < rlen
-                && left[lpos + min_len + ext] == right[rpos + min_len + ext]
+                && same_base(left[lpos + min_len + ext], right[rpos + min_len + ext])
             {
                 ext += 1;
             }

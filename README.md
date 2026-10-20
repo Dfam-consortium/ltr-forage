@@ -66,6 +66,12 @@ on more elements.
 By default, `ltr-forage` produces output that is format-compatible with
 LTRharvest, making it a transparent replacement in existing pipelines.
 
+`pipeline/ltr_library.py` builds on the candidates to produce a curated LTR
+family library from a genome assembly: one LTR and one internal model per
+family, cleaned of nested insertions and segmental duplications, in place of
+LTRharvest followed by LTR_retriever (see
+[Building a family library](#building-a-family-library)).
+
 ---
 
 ## Background and Credits
@@ -278,8 +284,8 @@ rule has one knob, `--keep LEVEL`:
 | Level | Kept when |
 |---|---|
 | `domain` | an LTR-order domain hit |
-| `standard` (default) | an LTR-order domain hit, or TG..CA at the ends with a TSD of 5 bp or more |
-| `loose` | an LTR-order domain hit, a TSD of 5 bp or more, or TG..CA with a 4 bp TSD |
+| `standard` (default) | an LTR-order domain hit, or TG..CA at the ends with a TSD of 4 bp or more |
+| `loose` | an LTR-order domain hit, a TSD of 5 bp or more, or TG..CA with a TSD of 4 bp or more |
 | `none` | always |
 
 At every level ltr-forage rejects a candidate whose protein hits are of
@@ -306,22 +312,47 @@ Alu-dimer pairs, 2 on unannotated contigs), 52 on rice and none on
 Arabidopsis, and no annotated element on any of the three. The alignment
 adds 40 s to an hg38 run.
 
-Measured against RepeatMasker annotation (strict or loose harness), the
-levels keep:
+A third veto uses the domain search on each LTR alone. An LTR does not
+encode the polyprotein, so a hit to a core polyprotein domain (integrase,
+gag, reverse transcriptase, the aspartyl proteases, chromo; the list is
+`CORE` in `src/domain.rs`) inside an LTR means the record is internal
+sequence. The case it catches on rice is two adjacent copies of one
+family called as a single element, with the repeated internal-plus-LTR
+unit as the "LTRs": Chr4:6791971..6808083 is a 16 kb call whose two 7.2
+kb LTRs are each a Truncator internal followed by 1.6 kb of Truncator
+LTR, and its LTRs carry gag and protease hits at E-values down to 1e-69.
+The self-alignment check cannot see these. On rice the veto removes 39
+candidates: 18 whose two LTRs the Jiang library labels internal
+sequence, 16 whose LTRs it labels LTR (10 of them annotated elements,
+0.3% of the annotated set), and 5 unannotated. It leaves 22 of the 40
+both-LTRs-internal candidates, whose short LTRs (106 to 2,400 bp) carry
+no core domain. The veto counts only the core domains because other profiles on
+the LTR-order list occur inside real LTRs: DUF834 (PF05754) and DUF1263
+(PF06882) hit 748 candidate pairs of annotated LTRs on rice, and a veto
+on the whole list removed 10% of the annotated elements. The two extra searches
+add about two minutes to the ten-minute rice run; `--keep-coding-ltrs`
+turns the veto off.
+
+Measured against RepeatMasker annotation (strict or loose harness), with
+the self-repeat check applied, the levels keep:
 
 | Genome | Candidates | Annotated | `domain` | `standard` | `loose` |
 |---|---|---|---|---|---|
-| hg38 | 41,661 | 2,267 | 68.5% of annotated, 88.7% precise | 68.7%, 86.7% | 71.6%, 70.5% |
-| Arabidopsis | 1,789 | 415 | 78.1%, 62.2% | 81.4%, 62.8% | 82.7%, 61.5% |
-| rice | 7,092 | 3,216 | 84.3%, 69.5% | 86.4%, 69.9% | 87.1%, 69.3% |
+| hg38 | 41,661 | 2,267 | 68.5% of annotated, 89.4% precise | 70.0%, 87.1% | 71.6%, 74.1% |
+| Arabidopsis | 1,789 | 415 | 78.1%, 62.2% | 82.2%, 63.0% | 82.7%, 62.0% |
+| rice | 7,092 | 3,216 | 84.3%, 70.4% | 86.6%, 70.9% | 87.1%, 70.6% |
 
 The plant precisions are floors set by the annotation: when we inspected
 the kept candidates the harness calls false there (analysis document,
 sections 9 and 10), most were elements whose two LTRs the library names
-differently, or nested copies. On rice the motif-and-TSD route alone is 98%
-precise and adds 2% of recall over `domain`. There is no separate
-tandem-repeat finder: of the 1,797 candidates `standard` keeps on hg38
-before the self-alignment check, 11 have an LTR that is mostly satellite,
+differently, or nested copies. The motif route accepts a 4 bp TSD because
+retroviruses make 4 to 6 bp target site duplications while plant Gypsy and
+Copia elements mostly make 5: among candidates with no domain hit, TG..CA with a
+5 bp TSD marks 6 annotated elements and 41 others on hg38, TG..CA with a
+4 bp TSD 30 and 13; on rice the 5 bp case dominates (68 and 2 against 7 and
+2). LTR_retriever ranks a 5 bp TSD first. There is no separate
+tandem-repeat finder: of the 1,797 candidates the earlier 5 bp rule kept
+on hg38 before the self-alignment check, 11 have an LTR that is mostly satellite,
 against 1,091 of all 41,661 candidates, and the check above removes 10 of
 the 11.
 
@@ -340,6 +371,89 @@ and the description repeats the evidence. RepeatModeler's LTRPipeline reads
 this file in place of LTR_retriever's output.
 
 ---
+
+### Phase 7 — Primer binding site (`--format tsv`, `--trna-out`)
+
+Reverse transcription of an LTR retrotransposon is primed by a host tRNA
+whose 3′ end, with its CCA tail, pairs with the primer binding site (PBS)
+just inside the 5′ LTR. ltr-forage finds the genome's own tRNA genes and
+looks for their 3′ ends at that position, so the probes come from the
+genome being searched and no curated tRNA set is needed.
+
+**tRNA genes.** `src/trna.rs` is a Rust port of the cytosolic tRNA search
+in ARAGORN 1.2.41 (Laslett and Canback 2004) as run with
+`aragorn -t -gc1 -l -i`: T-arm, acceptor-stem, D-arm and anticodon-stem
+searches with ARAGORN's scores and thresholds, introns up to 3,000 bp in
+the anticodon loop (`--trna-intron-max`), and its gene store and overlap
+rules. ARAGORN's 20 kb windows are searched in parallel and the detections
+replayed through its gene store in order, so the result equals a
+single-threaded run. Against ARAGORN compiled with default floating point
+(`-O2`), the calls are identical: 789 of 789 on Arabidopsis (whole
+chromosomes and 2 Mb chunks) and 1,411 of 1,411 on rice chunks. A build with
+`-Ofast` reorders floating-point sums and finds one more borderline gene on
+rice (a tRNA-Trp with a 220 bp intron). The scan takes 39 s on Arabidopsis
+and about 100 s on rice with 32 threads, under 5% of a rice run with the
+domain search. `--trna-scan FASTA` runs it alone; `--no-pbs-trna` skips it.
+
+**Probes.** Each tRNA gene of 70 to 120 bp with a standard amino acid gives
+an 18-nt probe: the reverse complement of its last 15 nt plus CCA, which
+starts with TGG. The test is the probe's first 12 nt, the tRNA's
+3′-terminal 12 nt, with the TGG exact and at most one mismatch elsewhere,
+starting 5 bp before to 15 bp after the first base past the 5′ LTR. Many
+families pair over only these 12 to 13 nt: rice elements primed by the
+initiator Met read TGGTATCAGAGC and then diverge, and an 18-nt test misses
+them. The full probe's best edit distance (at most 2) is reported as a
+secondary column. Both orientations are searched by default and the better
+hit kept: the strand ltr-forage infers from the protein domains follows the
+majority of hits, and for some rice Gypsy families those are accessory ORFs
+(DUF828, DUF1263, Transposase_28) on the strand opposite the integrase,
+while the PBS agrees with the integrase. Restricting the search to the
+domain strand (`--pbs-domain-strand`) loses 306 PBS calls on rice, 280 of
+them exact matches. `pbs_strand` gives the orientation the PBS was found in.
+
+On rice, an exact 12-nt PBS sits after 56% of the kept elements that match
+a curated family and after 0.1% of random genome windows (2.5% with one
+mismatch allowed); unannotated singletons and those carrying non-LTR
+transposon sequence have one at the random-window rate. A PBS is therefore
+strong evidence that a 5′ LTR end is real, but its absence is not evidence
+against an element: some families carry no recognizable PBS.
+
+**tRNA library (`--trna-out FILE`).** FILE is a FASTA library with one entry
+per distinct tRNA gene sequence, sorted by the number of kept elements it
+primes:
+
+```
+>tRNA-Met(cat)_1 type=Met(cat) copies=7 intron=no len=72 probe12=TGGTATCAGAGC pbs_kept=1294 pbs_kept_exact=1161 pbs_kept_mm1=133 pbs_cand=1455 pbs_cand_exact=1296 pbs_cand_mm1=159 first=Chr2:780010-780081(+)
+ATCAGAGTGGCGCAGCGGAAGCGTGGTGGGCCCATAACCCACAGGTCCCAGGATCGAAAC
+CTGGCTCTGATA
+```
+
+That is the top entry on rice (MSU7), where the scan finds 1,410 tRNA genes,
+1,057 distinct sequences and 361 probes, and the kept elements are primed
+mostly by Met(cat) (1,294 elements), Arg(cct) (817), Arg(acg) (73),
+Lys(ttt) (72), Arg(tct) (49) and Asp(gtc) (43); ltr-forage prints these
+counts to stderr.
+
+| Field | Meaning |
+|---|---|
+| ID | `tRNA-<type>_<n>`, numbered within each type in library order |
+| `type` | Amino acid and anticodon as ARAGORN names them; ambiguous calls keep ARAGORN's `?(…)` form |
+| `copies` | Genomic copies with this exact sequence (strand-independent: a copy is reported in its gene orientation) |
+| `intron` | `yes` when the gene has an intron in the anticodon loop (the sequence includes it) |
+| `len` | Gene length in bp, intron included |
+| `probe12` | The 12-nt PBS probe: the reverse complement of the tRNA's 3′-terminal 12 nt (its last 9 nt plus CCA); `none` for genes outside 70 to 120 bp or without a standard amino acid, which make no probe |
+| `pbs_kept`, `pbs_kept_exact`, `pbs_kept_mm1` | Kept elements whose best 12-nt PBS hit is this probe, in total, exact and with one mismatch |
+| `pbs_cand`, … | The same over all candidates |
+| `first` | Location of the first copy |
+
+Usage is credited to probe groups: distinct genes that share their
+3′-terminal 12 nt share one probe, and an element whose best hit is that
+probe counts for each of them, so the per-entry counts add up to more than
+the number of elements. The stderr summary counts each element once per
+tRNA type. Every call, with the ID of its library entry, is written to
+`FILE.tsv` (`seq`, `start`, `end`, `strand`, `name`, `length`, `intron`,
+`score`, `sequence`, `library_id`; coordinates 1-based within the sequence,
+start ≤ end).
 
 ## Differences from GenomeTools LTRharvest
 
@@ -400,6 +514,16 @@ insertion order would make.
 - The `sufr` tool for building `.sufr` index files
   ([TravisWheelerLab/sufr](https://github.com/TravisWheelerLab/sufr))
 
+For the family-library driver (`pipeline/ltr_library.py`) also:
+
+- Python ≥ 3.8 with numpy
+- The Rust port of RMBlast, `rmblastn` ≥ 3.0.9
+  ([Dfam-consortium/rmblast](https://github.com/Dfam-consortium/rmblast));
+  NCBI's C++ `rmblastn` does not take the options the driver uses
+- `te-composer` from dfam-curator ≥ 0.6.6 (consensus models)
+- An HMMER3 profile file of TE proteins for the domain search, such as
+  LTR_retriever's `TEfam.hmm`
+
 ### Build from source
 
 ```bash
@@ -429,6 +553,7 @@ to `sufr count` are not normalised, so pass them in upper case.
 
 ```
 ltr-forage [OPTIONS] <SUFR>
+ltr-forage --trna-scan <FASTA> [-j N] [--trna-intron-max BP]
 
 Arguments:
   <SUFR>  Path to a .sufr index file (created with `sufr create --dna`)
@@ -468,6 +593,9 @@ Domain search options:
                             translation against it and report order, superfamily and strand
       --domain-evalue <E>   E-value threshold for a domain hit [default: 0.05]
       --domain-flank <BP>   Bases added on each side of the element before translation [default: 50]
+      --keep-coding-ltrs    Keep candidates with a polyprotein domain hit inside an LTR (by default
+                            they are vetoed: an LTR does not encode the polyprotein, so the hit
+                            means the "LTR" is internal sequence)
 
 Decision and library options:
       --keep <LEVEL>        Evidence a candidate needs: domain | standard | loose | none [default: standard]
@@ -477,6 +605,13 @@ Decision and library options:
                             region, right LTR per element)
       --tandem-max <FRAC>   Reject a candidate when either LTR aligns to itself off the diagonal
                             over at least this fraction of its length [default: 0.99]
+
+Primer binding site options (tsv output):
+      --no-pbs-trna         Skip the genome tRNA scan behind the PBS columns
+      --pbs-domain-strand   Search for the PBS only on the strand the protein domains give (default: both)
+      --trna-out <FILE>     Write the genome's tRNA gene calls (the PBS probe source)
+      --trna-intron-max <BP>  Longest tRNA intron searched for [default: 3000]
+      --trna-scan <FASTA>   Only scan FASTA for tRNA genes, print the calls and exit
 
 Output and performance options:
       --overlaps <STRATEGY> Overlap removal strategy: all | best | no [default: best]
@@ -564,17 +699,22 @@ sequence named in the first column.
 | `aln_score`, `aln_columns` | Raw score and aligned columns of the trimmed alignment |
 | `trim_l5`, `trim_r5`, `trim_l3`, `trim_r3` | Bases removed by the end trim at the 5′ end of the left and right LTR and at their 3′ ends |
 | `window_edge` | 1 when the alignment reached within 5 bp of a window edge that was not a sequence end: the LTR may be longer than the window, or the pair sits in a larger duplication |
-| `tsd_len`, `tsd_seq`, `tsd_shift_l`, `tsd_shift_r` | Longest exact direct repeat (4 to 20 bp) flanking the element, allowing 0 or 1 bp of play at each end; `.` and 0 when none |
-| `motif` | First two bases of the left LTR and last two of the right LTR (TGCA for the canonical termini) |
+| `tsd_len`, `tsd_seq`, `tsd_shift_l`, `tsd_shift_r` | Longest exact direct repeat (4 to 20 bp) flanking the element, allowing 0 or 1 bp of play at each end; failing that, a 6 or 5 bp repeat with one mismatch directly against both LTR ends (see `tsd_mm`). `tsd_seq` is the left copy; `.` and 0 when none |
+| `motif`, `motif_class` | First two bases of the left LTR and last two of the right LTR, and LTR_retriever's reading of them: `TGCA` for the canonical termini, `known` for the other pairs its rules accept (TGCT, TACA, TACT, TGGA, TGGT, TATA, TGTA, TGCC), `other` |
 | `ppt_purines15`, `ppt_offset` | Purine count in the most purine-rich 15 bp window within 30 bp before the right LTR, and that window's start relative to the right LTR |
-| `pbs_offset` | Offset of the first TGG within 20 bp after the left LTR, or −1 |
+| `pbs_offset` | Start of the primer binding site relative to the first base after the 5′ LTR (−5 to +15), from the 12-nt tRNA match described under Phase 7; −1 when none or with `--no-pbs-trna` |
 | `n_count` | Ns inside the element |
 | `xdrop_tsd_len` | TSD length the X-drop stage's own search reported |
 | `int_tiles`, `int_multi_frac`, `int_gap_frac`, `int_gap_bp` | With `--internal-stats`: number of 20-mer tiles taken every 10 bp across the internal region (tiles containing N skipped), the fraction seen at least three times in the genome on either strand, and the longest run of single-copy tiles as a fraction of the tiles and in bases; `.` otherwise |
 | `dom_order`, `dom_superfamily`, `dom_strand` | With `--domain-hmm`: `LTR`, `notLTR`, `mixture`, `NA` or `none`; `Gypsy`, `Copia` or `unknown`; `+`, `-` or `?`, as described under Phase 5; `.` otherwise |
 | `dom_best_e`, `dom_hits` | Best E-value, and every hit as `accession:E-value:frame` (frames `aa1`..`aa3` forward, `rev_aa1`..`rev_aa3` on the reverse complement), comma separated; `.` when none |
+| `ltr_dom_hits` | With `--domain-hmm`: hits to the LTR-order (polyprotein) profiles when each LTR is searched on its own, summed over the two LTRs; 0 when `--keep-coding-ltrs` skips the search |
 | `lltr_self_cov`, `rltr_self_cov` | Fraction of each LTR covered by plus-strand alignments of the LTR against itself off the main diagonal; 1.00 for a satellite monomer or an Alu dimer, 0 for unique sequence |
-| `keep`, `evidence` | 1 when the candidate passes `--keep`, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `gapF` when `--internal-gap-max` rejected it, or `none` |
+| `keep`, `evidence` | 1 when the candidate passes `--keep`, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `veto:ltrdomainN`, `gapF` when `--internal-gap-max` rejected it, or `none` |
+| `pbs_trna`, `pbs_mm12` | The tRNA type(s) whose 3′-terminal 12 nt match the PBS, e.g. `Met(cat)` (several joined by `/` when they share the probe), and the mismatches (0 or 1); `.` when none |
+| `pbs_edist18` | Best edit distance (0 to 2) of a full 18-nt tRNA probe over the same window; `.` when none |
+| `pbs_strand` | `+` when the PBS was found after the left LTR, `-` when before the right LTR on the reverse strand; `.` when none |
+| `tsd_mm` | 1 when the TSD is the one-mismatch fallback, else 0. It is enriched about 20-fold over shifted flanks only for TG..CA elements (lotus), so it counts toward `--keep standard`/`loose` only alongside TG..CA; the evidence tag reads `tsd5mm1` |
 
 The TSD and motif columns are computed at the final boundaries with at most
 1 bp of play, so they keep their discriminating power: on hg38 a 5 bp TSD
@@ -592,6 +732,96 @@ keeps only half the real elements, so the statistic is reported here and any
 filter on it is a separate choice. The count loads the suffix array (4 bytes
 per base for genomes under 4 Gb) and the tile table: on hg38, 25.5 million
 tiles, 140 s and 45 GB at peak; on rice, 30 s.
+
+## Building a family library
+
+`pipeline/ltr_library.py` runs ltr-forage on a genome and turns its
+candidates into a family library for RepeatMasker or RepeatModeler's
+LTRPipeline:
+
+```bash
+pipeline/ltr_library.py genome.fa -o out -t 32 \
+    --domain-hmm /path/to/TEfam.hmm
+```
+
+It finds `ltr-forage`, `sufr`, `rmblastn` and `te-composer` from the
+`--ltr-forage`, `--sufr-bin`, `--rmblastn` and `--te-composer` options, then
+the `LTRFORAGE`, `SUFR`, `RMBLASTN` and `TE_COMPOSER` environment variables,
+then `PATH`, then checkouts next to this one.  `--sufr` reuses an existing
+index of the genome.  The driver also runs scripts from `eval/benchmarks/`,
+so it is run from a full checkout.
+
+### Steps
+
+1. **Index and depth sample.**  A sufr index, and a genome sample for copy
+   depth: the whole genome up to 200 Mb, else 10% of it in 100 kb windows.
+   Depth thresholds scale with genome size and the sample fraction.
+2. **ltr-forage** with re-extension, tiered TSDs, protein domains and
+   the decision step, giving the candidate table (`cand.tsv`) and a raw
+   library of each kept element's LTR and internal region.
+3. **Raw clustering and consensus representatives.**  The raw library is
+   clustered all-vs-all with rmblastn.  Each cluster of at least
+   `--min-cons` (3) elements is represented from here on by a te-composer
+   consensus, which drops alignment columns held by fewer than half the
+   median number of copies.  This keeps an insertion carried by a few copies
+   out of the model.
+4. **Depth cleanup.**  Three rounds of rmblastn search of the sample against
+   the library.  Stretches far above their record's own depth are excised
+   as nested passengers: 3x for an element, 10x for a consensus
+   representative, whose family is high-copy itself.  High-copy LTRs are
+   dropped, but never a consensus representative.
+5. **Nested-insertion vote and element clusters.**  A second clustering
+   excises LTRs nested in internals by vote.  Each big cluster's members
+   rejoin the cluster of their representative.
+6. **Segmental duplications.**  A cluster is dropped when most of its
+   pairs, or every one of its copies, share both flanks (300 bp at 80%
+   identity) with another copy: the copies are one duplicated locus, not
+   independent insertions (`--no-flank` skips this).
+7. **Containment, nested excision, PBS and tiering.**  Singletons are kept
+   only with LTR identity ≥ 93% or a primer binding site (`--tier strict`:
+   identity ≥ 90% and a PBS).
+8. **Models and families.**  A consensus model for each cluster of at least
+   `--min-cons` elements and the exemplar element for smaller ones, grouped
+   into 80-80 families (LTR and internal alike) with Gypsy and Copia
+   classes from the domain hits.
+
+`--stage-a` skips step 3 and depth-cleans and re-clusters every element, as
+the driver did before.  It is slower on large libraries and no more
+accurate.  `--min-cons 0` gives exemplar models only.  Each step's command
+lines and output go to `out/logs/`, and timings to `out/steps.log`.  A rerun
+skips finished steps; `--from STEP` reruns from a step on.
+
+### Output
+
+| File | Contents |
+|------|----------|
+| `library.fa` | The family library: `fam<N>_v<k>_LTR` and `fam<N>_v<k>_INT` records, classified `#LTR/Gypsy`, `#LTR/Copia` or `#LTR` |
+| `families.tsv` | Each model's family, origin element, kind, length, status and class |
+| `cand.tsv` | ltr-forage's per-candidate table, with every value behind its decision (see [Per-candidate table](#per-candidate-table---format-tsv)) |
+| `sd_clusters.tsv` | Clusters tested for segmental duplication, and the call |
+
+### Accuracy
+
+Library masking was scored against curated libraries: sensitivity and
+precision over the bases the curated LTR annotation covers.  Recovered
+families are the curated LTR and internal models covered at 80% or more.
+
+| Genome | Library | Sensitivity | Precision | Recovered LTR / INT |
+|--------|---------|-------------|-----------|---------------------|
+| Rice (MSU7) | ltr_library.py | 92.70% | 98.53% | 312 / 306 |
+| Rice (MSU7) | HiRepEat | 83.10% | 99.61% | 80 / 76 |
+| Zebra finch (bTaeGut7) | ltr_library.py | 74.76% | 83.03% | 24 / 30 |
+| Zebra finch (bTaeGut7) | HiRepEat | 70.58% | 90.86% | 16 / 27 |
+| Gorilla (mGorGor1 v2.1) | ltr_library.py | 34.57% | 97.65% | 2 / 8 |
+| Gorilla (mGorGor1 v2.1) | HiRepEat | 17.68% | 95.97% | 1 / 3 |
+
+Much of the zebra finch false-positive masking is in regions the curated
+library leaves unannotated.  About 95% of HiRepEat's falls there too, and
+several of these models are dispersed elements with retrotransposon domains,
+which suggests families missing from the curated library rather than
+artifacts.
+
+---
 
 ## Comparing with GenomeTools LTRharvest on hg38
 
@@ -733,13 +963,24 @@ search.
 4. Kurtz S. Reducing the space requirement of suffix trees.
    *Software — Practice & Experience.* 1999;**29**(13):1149–1171.
 
+5. Laslett D, Canback B. ARAGORN, a program to detect tRNA genes and tmRNA
+   genes in nucleotide sequences. *Nucleic Acids Res.* 2004;**32**(1):11–16.
+   DOI:[10.1093/nar/gkh152](https://doi.org/10.1093/nar/gkh152)
+
 ---
 
 ## License
 
-This software is released to the public domain under the
-[CC0 1.0 Universal](LICENSE) public domain dedication.
+ltr-forage is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.  See [LICENSE](LICENSE).
+
+`src/trna.rs` is a Rust port of the tRNA gene search in ARAGORN 1.2.41
+(Copyright (C) 2003-present Dean Laslett; Laslett and Canback 2004, Nucleic
+Acids Res. 32:11-16), which is distributed under GPL v3 or later; ltr-forage is
+licensed under GPL v3 or later to match.
 
 The LTRharvest algorithm is implemented based on the published description and
-the open-source GenomeTools reference implementation (GPL v2+).  The `sufr`
+the open-source GenomeTools reference implementation (ISC license).  The `sufr`
 library is used under its BSD-3-Clause license.
