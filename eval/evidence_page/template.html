@@ -1,0 +1,314 @@
+<title>Lotus Novel LTR Candidates</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
+<style>
+/* Layout: one reading column; a summary table, then one dossier per element with a genome-browser style track diagram. */
+:root {
+  --bg: #f6f7f8; --surface: #ffffff; --fg: #1d2329; --muted: #5d6873; --rule: #d9dee3;
+  --ltr: #2f5d8a; --int: #8c97a1; --tsd: #c27a12; --gap: #b9c0c7; --accent: #2f5d8a;
+  --gag: #3f8f5a; --pr: #8a6d1f; --inte: #7a4fa0; --rt: #b8433a; --rh: #c46a8f; --other: #6c7a86;
+  --sim-lo: #dbe6f0; --sim-hi: #1f4a73;
+  --ok: #2f7d4f; --ok-bg: #e3f1e8; --warn: #9a6400; --warn-bg: #fbefd9; --bad: #a33a32; --bad-bg: #f7e1df;
+  --display: "Source Serif 4", Georgia, serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14181c; --surface: #1b2026; --fg: #e3e7eb; --muted: #9aa5b0; --rule: #2e353d;
+  --ltr: #6fa3d6; --int: #6b7682; --tsd: #e0a040; --gap: #4a525b; --accent: #6fa3d6;
+  --gag: #63b47e; --pr: #c9a54a; --inte: #a982cc; --rt: #e0716a; --rh: #df8fb0; --other: #94a1ad;
+  --sim-lo: #26384a; --sim-hi: #8fc0ec;
+  --ok: #7ccf9a; --ok-bg: #1d3326; --warn: #e8b55c; --warn-bg: #3a2e17; --bad: #ef8a82; --bad-bg: #3d2120;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #14181c; --surface: #1b2026; --fg: #e3e7eb; --muted: #9aa5b0; --rule: #2e353d;
+  --ltr: #6fa3d6; --int: #6b7682; --tsd: #e0a040; --gap: #4a525b; --accent: #6fa3d6;
+  --gag: #63b47e; --pr: #c9a54a; --inte: #a982cc; --rt: #e0716a; --rh: #df8fb0; --other: #94a1ad;
+  --sim-lo: #26384a; --sim-hi: #8fc0ec;
+  --ok: #7ccf9a; --ok-bg: #1d3326; --warn: #e8b55c; --warn-bg: #3a2e17; --bad: #ef8a82; --bad-bg: #3d2120;
+  color-scheme: dark; }
+
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--body); }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: 2.1rem; }
+h2 { font-size: 1.45rem; }
+h3 { font-size: 1.05rem; font-family: var(--body); font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.lede { display: grid; gap: 14px; }
+.eyebrow { font: 500 0.75rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.funnel { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 6px; }
+.funnel div { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 14px; min-width: 0; flex: 1 1 150px; }
+.funnel b { display: block; font: 600 1.35rem/1.1 var(--body); font-variant-numeric: tabular-nums; }
+.funnel span { font-size: 0.82rem; color: var(--muted); }
+.funnel .bad b { color: var(--bad); }
+.note { border-left: 3px solid var(--warn); background: var(--warn-bg); padding: 12px 16px; border-radius: 0 6px 6px 0; max-width: 78ch; }
+.note p { max-width: none; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; white-space: nowrap; }
+th { font: 500 0.72rem/1.2 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+td.wrapc { white-space: normal; min-width: 180px; }
+a { color: var(--accent); }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip { display: inline-block; font: 500 0.74rem/1 var(--body); padding: 4px 8px; border-radius: 999px; white-space: nowrap; }
+.chip.ok { color: var(--ok); background: var(--ok-bg); }
+.chip.warn { color: var(--warn); background: var(--warn-bg); }
+.chip.bad { color: var(--bad); background: var(--bad-bg); }
+.case { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 22px 22px 24px; display: grid; gap: 18px; scroll-margin-top: 16px; }
+.case header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.case header h2 { font-size: 1.2rem; font-family: var(--mono); font-weight: 500; overflow-wrap: anywhere; }
+.verdict { max-width: 78ch; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 28px; }
+.grid2 > section { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; }
+.grid2 > section > * { min-width: 0; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; font-size: 0.88rem; }
+dt { color: var(--muted); }
+dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.seq { font: 0.8rem/1.5 var(--mono); overflow-x: auto; white-space: pre; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 8px 10px; }
+.seq .t { color: var(--tsd); font-weight: 500; text-decoration: underline; }
+.seq .l { color: var(--ltr); font-weight: 500; }
+.seq .m { background: var(--warn-bg); color: var(--warn); font-weight: 500; }
+.seq .dim { color: var(--muted); }
+details summary { cursor: pointer; color: var(--accent); font-size: 0.86rem; }
+details pre { font: 0.74rem/1.35 var(--mono); overflow-x: auto; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 10px; margin: 8px 0 0; }
+svg text { font-family: var(--mono); fill: var(--fg); }
+svg .lab { fill: var(--muted); font-size: 11px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.78rem; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.simtab td:first-child { color: var(--muted); }
+.trnabar { display: grid; grid-template-columns: max-content 1fr max-content; gap: 4px 10px; align-items: center; font-size: 0.84rem; max-width: 640px; }
+.trnabar .bar { height: 10px; border-radius: 2px; background: var(--accent); min-width: 2px; }
+.trnabar span:last-child, .trnabar .n { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.methods { display: grid; gap: 10px; font-size: 0.88rem; color: var(--muted); }
+.methods p { max-width: 80ch; }
+@media (max-width: 520px) { h1 { font-size: 1.6rem; } .case { padding: 16px; } }
+</style>
+
+<div class="wrap">
+  <div class="lede">
+    <div class="eyebrow">ltr-forage · Chinese lotus (Nelumbo nucifera, GCF_000365185.1)</div>
+    <h1>Lotus novel LTR candidates</h1>
+    <p>These are single-element families from the lotus recipe library that pass every metric and match no LTR in the published lotus library (Jiang lotus 3.3, from the LTR_retriever paper). For each one, the page shows the structural evidence ltr-forage found and how close the nearest published family is.</p>
+    <div class="funnel" id="funnel"></div>
+    <div class="note"><p><b>Most "novel" lotus singletons were assembly-gap artifacts.</b> 1,060 of the 1,191 candidates had LTRs that were mostly N: ltr-forage matched two assembly gaps to each other as if they were identical LTRs. This bug is now fixed (N never matches anything, as in GenomeTools), and the lotus recipe is being rerun. The 130 elements with N-free LTRs, including the eight below, are not affected. Four of the eight still have gaps inside their internal region, shown as hatched blocks.</p></div>
+  </div>
+
+  <section style="display:grid;gap:12px">
+    <h2>The eight strongest</h2>
+    <p>Ranked by evidence: number of protein domains, a 4–6 bp TSD, TG…CA ends and a primer binding site, then picked to cover both superfamilies. "Protein" is tblastx identity of the internal region to the closest published internal sequence.</p>
+    <div class="scroll"><table id="summary"></table></div>
+  </section>
+
+  <section style="display:grid;gap:12px">
+    <h2>The genome's own tRNAs</h2>
+    <p id="trnalede"></p>
+    <div class="trnabar" id="trnabar"></div>
+  </section>
+
+  <div id="cases" style="display:grid;gap:28px"></div>
+
+  <section class="methods">
+    <h2 style="color:var(--fg)">How these were measured</h2>
+    <p><b>Structure</b> (TSD, end motif, PBS, PPT, LTR identity) comes from ltr-forage's feature table. The TSD is the duplicated sequence just outside both LTRs: an exact repeat, or failing that a 5–6 bp repeat with one mismatch directly against both LTR ends. In lotus a one-mismatch repeat sits at the ends of 20% of TG…CA elements that lack an exact TSD, against 1% in flanks 37 bp further out. The PPT is computed on the + strand. The PPT is the most purine-rich 15 bp window in the 30 bp before the 3′ LTR; 11 or more purines is suggestive.</p>
+    <p><b>Primer binding site.</b> tRNA genes were called in the lotus genome with ARAGORN (now ported into ltr-forage). Each tRNA's 3′ end, its last 15 nt plus the CCA added after transcription, gives a probe: the reverse complement of its first 12 nt, which starts with TGG. A PBS is a probe match, with TGG exact and at most one other mismatch, starting from 5 bp inside to 15 bp past the inner edge of the 5′ LTR. Both strands are searched, so an element on the − strand has its PBS inside the 3′ LTR as drawn. "Paired" counts complementary bases over 18 nt. In random lotus windows of the same size an exact 12-nt match occurs 0.2% of the time and a match with up to one mismatch 3.6% of the time, so a hit is strong evidence.</p>
+    <p><b>Domain positions</b> come from hmmscan with LTR_retriever's TEfam.hmm (Pfam retrotransposon models) on six-frame ORFs of at least 60 aa. Overlapping weaker hits were dropped.</p>
+    <p><b>Nearest published family:</b> the 5′ LTR and the internal region were each searched with blastn (word size 11, E ≤ 1e-5) against the Jiang lotus 3.3 library, and the internal region with tblastx against its internal sequences. Identity is weighted over all alignments to that family. Coverage is the fraction of the query those alignments cover. The same LTR search was run against the rest of our own lotus library.</p>
+    <p><b>Genome copies</b> are RepeatMasker hits of the LTR record covering at least half its length, from the whole-genome mask with the recipe library. The higher of the two LTRs is shown, and the count includes the element itself.</p>
+  </section>
+</div>
+
+<script>
+const CASES = /*DATA*/;
+const TRNA = /*TRNA*/;
+const NOTES = {
+  "NW_010729194.1:69174..73461": ["ok", "Distinct, complete family",
+    "Gap-free, with a full Copia domain set in order (GAG, pre-integrase, integrase, RT) and 11 of 15 purines before the 3′ LTR. No TSD was found, and the ends are GT…TT rather than TG…CA. Its protein is only 51% identical to the closest published family (NN00161), over 95% of the internal region, so it is a different family, not a variant. Nothing else in our library resembles it. The weak MULE transposase hit near the 3′ end (E = 2e-3) is probably noise."],
+  "NW_010729096.1:5829780..5835273": ["ok", "Distinct family; spans gaps",
+    "Copia coding order (GAG, pre-integrase, integrase, RT) with a 5 bp TSD and TG…CA ends. Nothing published aligns to its LTR, and the closest internal protein is 46% identical. Two assembly gaps take out 851 bp of the internal region. Another lotus cluster's LTR matches it at 81% over its full length, right at the 80-80 family line."],
+  "NW_010729188.1:868007..871777": ["ok", "Distinct chromovirus",
+    "A Gypsy element with a chromodomain (chromovirus lineage), GAG and protease. No RT domain was found, so the RT region may be degraded. Its protein is 49% identical to the closest published family (NN00604) over 90% of the internal region. The 100% LTR \"match\" to NN00647 covers only 28 bp (7% of the LTR)."],
+  "NW_010729133.1:1402342..1407359": ["warn", "Distinct family; mostly in gaps",
+    "A 5 bp TSD (GAGAT) and TG…CA ends, but 1.6 kb of the element is assembly gap, and only the integrase region is assembled. ltr-forage called it Gypsy, but the pre-integrase domain is typical of Copia, so the superfamily is uncertain. The closest published protein (NN00193) is 55% identical. Its LTR has 29 genome copies, the most of these eight."],
+  "NW_010729082.1:5389356..5394739": ["warn", "Known coding region, new LTR",
+    "A 5 bp TSD and TG…TA ends. The internal region is 79% identical in protein (88% nucleotide) to NN00001 over about half its length, but the LTR matches nothing published. Under the 80-80-80 rule the LTR makes it a separate family. It could also be an NN00001 relative whose LTR the published library does not include. Gaps remove 1.7 kb of the internal region."],
+  "NW_010729202.1:999007..1002955": ["warn", "Sister family of NN00136",
+    "TG…CA ends, no gaps, and a 5 bp TSD whose two copies differ at one base (AGGAT/AAGAT), spotted by a curator; ltr-forage now reports such TSDs. The internal region is 86% (nucleotide) and 75% (protein) identical to NN00136. The LTRs are only 71% identical over 63% of their length, which is below the 80-80 line, so by the usual rule it is a separate but closely related family."],
+  "NW_010729149.1:2264745..2269862": ["warn", "Borderline member of NN00167",
+    "A 5 bp TSD and TG…CA ends. Its LTR is 80.1% identical to NN00167's over the full length, exactly at the 80-80 cutoff. The screening search (dc-megablast) missed this match, so this is a borderline call, not a new family. Two other lotus clusters have LTRs 93–95% identical to it, so our library already contains this family more than once."],
+  "NW_010729087.1:7825300..7834103": ["bad", "Two nested elements",
+    "Domains run forward on the left half and reverse on the right half, so these are two Copia elements, one inserted into the other in opposite orientation. The record mixes two families. This is the nesting artifact the recipe should remove; singleton excision missed it because neither piece matches another cluster. Both LTRs are single-copy in the genome."],
+};
+const ORDER = Object.keys(NOTES);
+const byId = Object.fromEntries(CASES.map(c => [c.id, c]));
+const cases = ORDER.map(id => byId[id]).filter(Boolean);
+
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
+const pct = v => (v * 100).toFixed(0) + "%";
+const fam = t => t ? t.replace(/_(LTR|INT)$/, "") : "–";
+const copies = c => Math.max(...Object.values(c.ltr_copies).map(v => v.copies50));
+const domClass = n => /gag|zf-CCHC|DUF4219/i.test(n) ? "gag" : /asp_prot|RVP|pepsin/i.test(n) ? "pr" : /rve|integr/i.test(n) ? "inte" : /RVT|RT/.test(n) ? "rt" : /RNase|RNaseH/i.test(n) ? "rh" : "other";
+const trnaName = t => Object.keys(t.trna_types).join(" / ");
+const best = (arr) => arr && arr.length ? arr[0] : null;
+
+document.getElementById("funnel").innerHTML = [
+  ["11,035", "elements kept by ltr-forage"],
+  ["1,191", "singletons ≥95% LTR identity, no published LTR match"],
+  ["1,060", "of those were assembly-gap artifacts", "bad"],
+  ["130", "have N-free LTRs"],
+  ["8", "shown here"],
+].map(([n, t, cls]) => `<div class="${cls || ""}"><b>${n}</b><span>${t}</span></div>`).join("");
+
+document.getElementById("trnalede").textContent = `ARAGORN finds ${TRNA.genes.toLocaleString()} nuclear tRNA genes in lotus, with ${TRNA.probes} distinct 3′ ends. ${TRNA.with_pbs.toLocaleString()} of the ${TRNA.elements.toLocaleString()} ltr-forage candidates (${(100 * TRNA.with_pbs / TRNA.elements).toFixed(0)}%) have a primer binding site for one of them. As in other plants, the initiator methionine tRNA dominates, then lysine. Six of the eight elements below use Met(cat), and in each the PBS lies on the same strand as the protein domains.`;
+const tmax = TRNA.top[0][1];
+document.getElementById("trnabar").innerHTML = TRNA.top.map(([n, v]) => `<span>${esc(n)}</span><div class="bar" style="width:${(100 * v / tmax).toFixed(1)}%"></div><span class="n">${v.toLocaleString()}</span>`).join("");
+
+const sumRows = cases.map(c => {
+  const [lvl, label] = NOTES[c.id];
+  const nl = best(c.near_ltr), ni = best(c.near_int), na = best(c.near_int_aa);
+  return `<tr>
+    <td><a href="#c${ORDER.indexOf(c.id)}">${esc(c.id)}</a></td>
+    <td>${esc(c.superfamily)}</td>
+    <td>${(c.len / 1000).toFixed(1)} kb</td>
+    <td>${c.ltr_identity.toFixed(1)}%</td>
+    <td>${c.tsd_len ? esc(c.tsd_seq) + (c.tsd_mm ? "/" + esc(c.flank3.slice(0, c.tsd_len)) : "") : "–"}</td>
+    <td>${c.domains.length}</td>
+    <td>${c.trna ? `${esc(trnaName(c.trna))} ${c.trna.mm12 ? "(1 mm)" : ""}` : "none"}</td>
+    <td>${nl ? `${fam(nl.target)} ${nl.ident}% / ${pct(nl.qcov)}` : "none"}</td>
+    <td>${na ? `${fam(na.target)} ${na.ident}%` : "none"}</td>
+    <td>${copies(c)}</td>
+    <td><span class="chip ${lvl}">${esc(label)}</span></td></tr>`;
+}).join("");
+document.getElementById("summary").innerHTML = `<thead><tr><th>Element</th><th>Superfamily</th><th>Length</th><th>LTR id</th><th>TSD</th><th>Domains</th><th>PBS primer</th><th>Nearest LTR (id / cov)</th><th>Protein</th><th>LTR copies</th><th>Verdict</th></tr></thead><tbody>${sumRows}</tbody>`;
+
+function diagram(c) {
+  const W = 1000, L0 = 150, L1 = 985, span = L1 - L0, len = c.len;
+  const x = p => L0 + (p - 1) / len * span;
+  const ltrL = c.lltr[1] - c.lltr[0] + 1, rS = c.rltr[0] - c.start + 1;
+  const intOff = ltrL; // INT starts after the 5' LTR
+  let s = "";
+  const rows = { dom: 26, elem: 84, nt: 128, aa: 156, own: 184 };
+  // labels
+  s += `<text class="lab" x="0" y="${rows.dom + 4}">protein domains</text>`;
+  s += `<text class="lab" x="0" y="${rows.elem + 4}">element</text>`;
+  s += `<text class="lab" x="0" y="${rows.nt + 4}">published, nt</text>`;
+  s += `<text class="lab" x="0" y="${rows.aa + 4}">published, protein</text>`;
+  // scale
+  const step = len > 6000 ? 2000 : 1000;
+  for (let p = 0; p <= len; p += step) {
+    s += `<line x1="${x(p + 1)}" x2="${x(p + 1)}" y1="${rows.elem + 20}" y2="${rows.elem + 24}" stroke="var(--muted)"/>`;
+    s += `<text class="lab" x="${x(p + 1)}" y="${rows.elem + 34}" text-anchor="middle" style="font-size:10px">${p / 1000} kb</text>`;
+  }
+  // element: INT line, gaps, LTRs
+  s += `<line x1="${x(1)}" x2="${x(len)}" y1="${rows.elem}" y2="${rows.elem}" stroke="var(--int)" stroke-width="3"/>`;
+  for (const [a, b] of c.n_runs) s += `<rect x="${x(a)}" y="${rows.elem - 9}" width="${Math.max(1, x(b) - x(a))}" height="18" fill="url(#hatch${c.start})" stroke="var(--gap)"/>`;
+  s += `<rect x="${x(1)}" y="${rows.elem - 9}" width="${x(ltrL) - x(1)}" height="18" fill="var(--ltr)" rx="2"/>`;
+  s += `<rect x="${x(rS)}" y="${rows.elem - 9}" width="${x(len) - x(rS)}" height="18" fill="var(--ltr)" rx="2"/>`;
+  // TSD flags
+  if (c.tsd_len) for (const px of [x(1) - 4, x(len) + 4]) s += `<path d="M${px - 4},${rows.elem - 15} L${px + 4},${rows.elem - 15} L${px},${rows.elem - 9} Z" fill="var(--tsd)"/>`;
+  // PBS / PPT
+  if (c.trna) { const t = c.trna, p = t.strand === "+" ? x(ltrL + 1 + t.offset) : x(rS - 1 - t.offset); s += `<line x1="${p}" x2="${p}" y1="${rows.elem - 14}" y2="${rows.elem + 14}" stroke="var(--fg)" stroke-width="1.5"/><text x="${p + 3}" y="${rows.elem - 14}" style="font-size:10px">PBS</text>`; }
+  { const p = x(rS + c.ppt_offset); s += `<line x1="${p}" x2="${p}" y1="${rows.elem - 14}" y2="${rows.elem + 14}" stroke="var(--fg)" stroke-width="1.5" stroke-dasharray="2 2"/><text x="${p - 3}" y="${rows.elem - 14}" text-anchor="end" style="font-size:10px">PPT</text>`; }
+  // domains
+  c.domains.forEach((d, i) => {
+    const a = x(d.start), b = x(d.end), y = rows.dom + (i % 2 ? 12 : -6), h = 12, cl = domClass(d.name);
+    const tip = d.strand === "+" ? `M${a},${y} L${b - 5},${y} L${b},${y + h / 2} L${b - 5},${y + h} L${a},${y + h} Z` : `M${a + 5},${y} L${b},${y} L${b},${y + h} L${a + 5},${y + h} L${a},${y + h / 2} Z`;
+    s += `<path d="${tip}" fill="var(--${cl})"><title>${esc(d.name)} (${esc(d.desc)}), ${d.strand} strand, E=${d.ievalue.toExponential(0)}</title></path>`;
+  });
+  // similarity tracks
+  const simCol = pid => { const t = Math.max(0, Math.min(1, (pid - 40) / 60)); return `color-mix(in srgb, var(--sim-hi) ${Math.round(t * 100)}%, var(--sim-lo))`; };
+  const bars = (hit, off, row) => (hit ? hit.hsps : []).map(h => `<rect x="${x(off + h.qs)}" y="${row - 6}" width="${Math.max(1.5, x(off + h.qe) - x(off + h.qs))}" height="12" fill="${simCol(h.pid)}"><title>${esc(fam(hit.target))}: ${h.pid.toFixed(1)}% over ${h.qe - h.qs + 1} bp</title></rect>`).join("");
+  s += `<line x1="${x(1)}" x2="${x(len)}" y1="${rows.nt}" y2="${rows.nt}" stroke="var(--rule)"/>`;
+  s += `<line x1="${x(1)}" x2="${x(len)}" y1="${rows.aa}" y2="${rows.aa}" stroke="var(--rule)"/>`;
+  s += bars(best(c.near_ltr), 0, rows.nt) + bars(best(c.near_int), intOff, rows.nt) + bars(best(c.near_int_aa), intOff, rows.aa);
+  const nl = best(c.near_ltr), ni = best(c.near_int), na = best(c.near_int_aa);
+  s += `<text class="lab" x="${x(1)}" y="${rows.nt + 20}" style="font-size:10px">LTR: ${nl ? esc(fam(nl.target)) : "no hit"}   internal: ${ni ? esc(fam(ni.target)) : "no hit"}</text>`;
+  s += `<text class="lab" x="${x(1)}" y="${rows.aa + 20}" style="font-size:10px">internal: ${na ? esc(fam(na.target)) : "no hit"}</text>`;
+  return `<div class="scroll"><svg viewBox="0 0 ${W} 186" style="min-width:640px;width:100%;height:auto" role="img" aria-label="Structure of ${esc(c.id)}">
+    <defs><pattern id="hatch${c.start}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--surface)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--gap)" stroke-width="2"/></pattern></defs>${s}</svg></div>`;
+}
+
+function ends(c) {
+  const t = c.tsd_len, f5 = c.flank5, f3 = c.flank3, r3 = f3.slice(0, t);
+  // a one-mismatch TSD (tsd_mm): highlight the differing base in each copy
+  const diff = (a, b) => a.split("").map((ch, i) => ch === b[i] ? esc(ch) : `<span class="m">${esc(ch)}</span>`).join("");
+  const tsdL = t && f5.endsWith(c.tsd_seq) ? `<span class="dim">${esc(f5.slice(0, -t))}</span><span class="t">${c.tsd_mm ? diff(c.tsd_seq, r3) : esc(c.tsd_seq)}</span>` : `<span class="dim">${esc(f5)}</span>`;
+  const tsdR = t && (c.tsd_mm || f3.startsWith(c.tsd_seq)) ? `<span class="t">${c.tsd_mm ? diff(r3, c.tsd_seq) : esc(r3)}</span><span class="dim">${esc(f3.slice(t))}</span>` : `<span class="dim">${esc(f3)}</span>`;
+  const m5 = `<span class="m">${esc(c.ltr5_head.slice(0, 2))}</span><span class="l">${esc(c.ltr5_head.slice(2))}</span>`;
+  const m3 = `<span class="l">${esc(c.ltr3_tail.slice(0, -2))}</span><span class="m">${esc(c.ltr3_tail.slice(-2))}</span>`;
+  return `<div class="seq">5′ end  ${tsdL}${m5}…\n3′ end  …${m3}${tsdR}</div>`;
+}
+function pbsppt(c) {
+  let out = "";
+  if (c.trna) {
+    const t = c.trna, w = t.context, a = t.site_at, comp = t.trna_3end.split("").reverse().join("");
+    const cmp = { A: "T", C: "G", G: "C", T: "A" }, pad = " ".repeat(a);
+    const bars = t.site.split("").map((b, i) => cmp[b] === comp[i] ? "|" : " ").join("");
+    out += `PBS     <span class="l">${esc(w.slice(0, Math.min(5, a)))}</span><span class="dim">${esc(w.slice(Math.min(5, a), a))}</span><span class="m">${esc(t.site)}</span><span class="dim">${esc(w.slice(a + 18, a + 26))}</span>  <span class="dim">(${t.strand} strand)</span>\n`;
+    out += `        ${pad}${bars}\n`;
+    out += `tRNA    ${pad}<span class="l">${esc(comp)}</span>  <span class="dim">3′ end of tRNA-${esc(trnaName(t))}, read 3′→5′</span>\n\n`;
+  } else out += `PBS     <span class="dim">no tRNA primer site found</span>\n\n`;
+  const b = c.before3ltr, st = b.length + c.ppt_offset;
+  if (st >= 0) out += `PPT     <span class="dim">${esc(b.slice(0, st))}</span><span class="m">${esc(b.slice(st, st + 15))}</span><span class="dim">${esc(b.slice(st + 15))}</span><span class="l">|3′ LTR</span>`;
+  return `<div class="seq">${out}</div>`;
+}
+
+document.getElementById("cases").innerHTML = cases.map((c, i) => {
+  const [lvl, label, text] = NOTES[c.id];
+  const nl = best(c.near_ltr), ni = best(c.near_int), na = best(c.near_int_aa), no = best(c.near_own);
+  const gapbp = c.n_runs.reduce((a, [s, e]) => a + e - s + 1, 0);
+  const row = (k, h, extra) => `<tr><td>${k}</td><td>${h ? esc(fam(h.target)) : "none"}</td><td>${h ? h.ident + "%" : "–"}</td><td>${h ? pct(h.qcov) : "–"}</td>${extra !== undefined ? `<td>${extra}</td>` : ""}</tr>`;
+  const runners = (arr) => arr.slice(1, 3).map(h => `${esc(fam(h.target))} ${h.ident}%`).join(", ") || "–";
+  return `<article class="case" id="c${i}">
+    <header><h2>${esc(c.id)}</h2><span class="chip ${lvl}">${esc(label)}</span></header>
+    <p class="verdict">${esc(text)}</p>
+    ${diagram(c)}
+    <div class="legend"><span><i style="background:var(--ltr)"></i>LTR</span><span><i style="background:repeating-linear-gradient(45deg,var(--gap) 0 2px,var(--surface) 2px 4px);border:1px solid var(--gap)"></i>assembly gap</span><span><i style="background:var(--tsd)"></i>TSD</span><span><i style="background:var(--gag)"></i>GAG</span><span><i style="background:var(--pr)"></i>protease</span><span><i style="background:var(--inte)"></i>integrase</span><span><i style="background:var(--rt)"></i>RT</span><span><i style="background:var(--other)"></i>other</span><span><i style="background:linear-gradient(90deg,var(--sim-lo),var(--sim-hi))"></i>identity 40→100%</span></div>
+    <div class="grid2">
+      <section>
+        <h3>Structural evidence</h3>
+        <dl>
+          <dt>Location</dt><dd>${esc(c.seq)}:${c.start.toLocaleString()}–${c.end.toLocaleString()} (${c.len.toLocaleString()} bp)</dd>
+          <dt>LTRs</dt><dd>${(c.lltr[1] - c.lltr[0] + 1)} / ${(c.rltr[1] - c.rltr[0] + 1)} bp, ${c.ltr_identity.toFixed(2)}% identical</dd>
+          <dt>TSD</dt><dd>${c.tsd_len ? `${c.tsd_len} bp, ${esc(c.tsd_seq)}${c.tsd_mm ? ` / ${esc(c.flank3.slice(0, c.tsd_len))}, one mismatch` : ""}` : "none found"}</dd>
+          <dt>Ends</dt><dd>${esc(c.motif.slice(0, 2))}…${esc(c.motif.slice(2))} ${c.motif_class === "TGCA" ? "(canonical TG…CA)" : c.motif_class === "known" ? "(known variant)" : "(non-canonical)"}</dd>
+          <dt>PBS</dt><dd>${c.trna ? `tRNA-${esc(trnaName(c.trna))}, ${c.trna.mm12 ? "1 mismatch" : "exact"} over 12 nt, ${c.trna.match18}/18 paired; ${c.trna.offset} bp inside the ${c.trna.strand === "+" ? "5′ LTR" : "3′ LTR on the − strand"} ${c.trna.strand === c.dom_strand || c.domains.length && c.domains.every(d => d.strand === c.trna.strand) ? "(same strand as the domains)" : ""}` : "no tRNA primer site within −5…+15 bp of either LTR"}</dd>
+          <dt>PPT</dt><dd>${c.ppt_purines15}/15 purines in the best window, starting ${-c.ppt_offset} bp before the 3′ LTR</dd>
+          <dt>Domains</dt><dd>${c.domains.map(d => `${esc(d.name)}${d.strand === "-" ? "(−)" : ""}`).join(" · ") || "none"}</dd>
+          <dt>Gaps</dt><dd>${gapbp ? `${gapbp.toLocaleString()} bp of N in the internal region` : "none"}</dd>
+          <dt>LTR copies</dt><dd>${copies(c)} in the genome (≥50% of the LTR)</dd>
+        </dl>
+        ${ends(c)}
+        ${pbsppt(c)}
+        <details><summary>5′ vs 3′ LTR alignment</summary><pre>${esc(c.ltr_pair_aln)}</pre></details>
+      </section>
+      <section>
+        <h3>Distance from known families</h3>
+        <div class="scroll"><table class="simtab">
+          <thead><tr><th>Query</th><th>Closest</th><th>Identity</th><th>Coverage</th><th>Next</th></tr></thead>
+          <tbody>
+            ${row("LTR, nt", nl, runners(c.near_ltr))}
+            ${row("Internal, nt", ni, runners(c.near_int))}
+            ${row("Internal, protein", na, runners(c.near_int_aa))}
+            ${row("LTR vs our library", no, runners(c.near_own))}
+          </tbody></table></div>
+        <p style="font-size:0.84rem;color:var(--muted)">Published library: Jiang lotus 3.3. The 80-80-80 rule puts two elements in the same family when their LTRs (or internal regions) are at least 80% identical over at least 80% of their length.</p>
+        <h3 style="margin-top:6px">Domain hits</h3>
+        <div class="scroll"><table>
+          <thead><tr><th>Domain</th><th>Strand</th><th>Position</th><th>E-value</th></tr></thead>
+          <tbody>${c.domains.map(d => `<tr><td title="${esc(d.desc)}">${esc(d.name)}</td><td>${d.strand}</td><td>${d.start.toLocaleString()}–${d.end.toLocaleString()}</td><td>${d.ievalue.toExponential(0)}</td></tr>`).join("")}</tbody>
+        </table></div>
+        ${c.trna ? `<h3 style="margin-top:6px">Primer tRNA</h3>
+        <dl>
+          <dt>tRNA</dt><dd>${esc(trnaName(c.trna))}, ${c.trna.copies} gene copies with this 3′ end</dd>
+          <dt>Probe</dt><dd style="font-family:var(--mono)">${esc(c.trna.probe12)}</dd>
+          <dt>Genome-wide</dt><dd>primes ${c.trna.uses.toLocaleString()} of ${TRNA.elements.toLocaleString()} ltr-forage candidates (${(100 * c.trna.uses / TRNA.with_pbs).toFixed(0)}% of those with a PBS)</dd>
+        </dl>` : ""}
+      </section>
+    </div>
+  </article>`;
+}).join("");
+</script>
