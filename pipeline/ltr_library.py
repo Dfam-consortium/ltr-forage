@@ -7,7 +7,9 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log):
    0  index      sufr suffix array of the genome (skipped with --sufr)
    0  sample     depth sample: the whole genome up to --sample-above Mb, else a random
                  --sample-frac of its --window-kb windows (seeded); depth floors are scaled to it
- 1-5  ltr-forage detect, re-extend, annotate (domains, TSD, PBS), decide, raw library
+ 1-5  ltr-forage detect, re-extend, annotate (domains, TSD, PBS), decide, raw library; tandem arrays
+                 (satellites, simple repeats) are masked from the seed search (tandem.bed; --no-mask-tandem),
+                 and --mask-bed adds intervals of one's own (e.g. ULTRA calls)
    5b precluster element clusters of the raw library (all-vs-all, as step 8)
    5c premodels  te-composer consensus for raw clusters of >= --min-cons elements; from here on
                  each big cluster is represented by its consensus, and steps 6-9 work on the elements of
@@ -32,9 +34,12 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log):
                  exemplar for smaller ones; a stage B representative is kept as steps 6-11 left it;
                  flagged segmental-duplication clusters left out (--min-cons 0: exemplars only)
   14  families   80-80 families (LTRs and internals both), gap-aware, Gypsy/Copia class names
+  15  evidence   --evidence-page: evidence.html, one dossier per family from its founding element
+                 (structure, domains, PBS, copies, verdict; pipeline/evidence_page.py, which also takes a
+                 genome mask, a curated annotation and another tool's mask when run by hand)
 
 Outputs: library.fa (fam<N>_v<k>_LTR|INT#LTR/<class>), families.tsv, cand.tsv (every candidate
-element, ltr-forage's table).  A rerun skips finished steps (<outdir>/.done); --from STEP
+element, ltr-forage's table), evidence.html with --evidence-page.  A rerun skips finished steps (<outdir>/.done); --from STEP
 reruns from a step on.
 
 Stage B against stage A (2026-10-20; sensitivity / precision of LTR masking against curated libraries):
@@ -43,30 +48,51 @@ instead of ~109, gorilla 34.57 / 97.65 (HiRepEat 17.68 / 95.97).  Most of zebra 
 outside the curated library and much of it looks like real families HiRepEat also finds: FP rules need
 an artifact mechanism, not lower novelty.
 
-External programs: ltr-forage, sufr, rmblastn (Rust) and te-composer (dfam-curator >= 0.6.6), found from
-the options, the environment (LTRFORAGE, SUFR, RMBLASTN, TE_COMPOSER) or PATH; Python 3 with numpy."""
-import argparse, os, random, shutil, subprocess, sys, time
+External programs: ltr-forage, sufr, rmblastn (Rust), te-composer (dfam-curator >= 0.6.6), and nail
+(>= 0.7.1) with MMseqs2 for ltr-forage's domain search, found from the options, the environment (LTRFORAGE,
+SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy."""
+import argparse, os, random, re, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-RECIPE = os.path.join(ROOT, 'eval', 'benchmarks', 'recipe')
-BENCH = os.path.join(ROOT, 'eval', 'benchmarks')
 STEPS = ['index', 'sample', 'ltr-forage', 'precluster', 'premodels', 'depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier',
-         'models', 'families']
+         'models', 'families', 'evidence']
 AVA = 'qseqid sseqid pident length qstart qend sstart send qlen slen bitscore'.split()
 
 
-def find_tool(opt, env, name, fallbacks=(), check=None):
+def tool_version(path, flag='--version'):
+    """The first line a program prints for its version flag ('' if it prints none)."""
+    try:
+        r = subprocess.run([path, flag], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+    return ((r.stdout or r.stderr).strip().split('\n') or [''])[0].strip()
+
+
+def version_tuple(line):
+    m = re.search(r'(\d+)\.(\d+)\.(\d+)', line)
+    return tuple(map(int, m.groups())) if m else None
+
+
+def find_tool(opt, env, name, fallbacks=(), check=None, min_version=None, flag='--version'):
     """First executable from the option, the environment variable, PATH, then the fallbacks;
     with check, only one whose --help output contains that text (NCBI's rmblastn is often on
-    PATH too, and only the Rust port takes the options used here)."""
+    PATH too, and only the Rust port takes the options used here); with min_version, only one at
+    least that version (an older install on PATH would otherwise shadow a newer checkout)."""
+    seen = []
     for p in (opt, os.environ.get(env), shutil.which(name), *fallbacks):
         if not (p and os.path.isfile(p) and os.access(p, os.X_OK)):
             continue
         if check and check not in subprocess.run([p, '--help'], capture_output=True, text=True).stdout:
             continue
+        if min_version:
+            v = version_tuple(tool_version(p, flag))
+            if v is None or v < min_version:
+                seen.append(f'{p} ({".".join(map(str, v)) if v else "unknown version"})'); continue
         return os.path.abspath(p)
-    sys.exit(f'ltr_library: cannot find {name}' + (f' ({check})' if check else '') + f'; give --{name} or set {env}')
+    need = f' >= {".".join(map(str, min_version))}' if min_version else ''
+    sys.exit(f'ltr_library: cannot find {name}{need}' + (f' ({check})' if check else '') +
+             (f'; too old: {", ".join(seen)}' if seen else '') + f'; give --{name.replace("_", "-")} or set {env}')
 
 
 def read_fasta(path):
@@ -113,8 +139,7 @@ class Run:
         os.makedirs(os.path.join(self.out, 'logs'), exist_ok=True)
         os.makedirs(os.path.join(self.out, 'elem'), exist_ok=True)
         os.makedirs(os.path.join(self.out, '.done'), exist_ok=True)
-        self.env = dict(os.environ, TSV=os.path.join(self.out, 'cand.tsv'), JIANG='/dev/null',
-                        RMBLASTN=a.rmblastn, WORD=str(a.word))
+        self.env = dict(os.environ, TSV=os.path.join(self.out, 'cand.tsv'), RMBLASTN=a.rmblastn, WORD=str(a.word))
         if a.from_step:
             for s in STEPS[STEPS.index(a.from_step):]:
                 p = self.done_path(s)
@@ -150,11 +175,11 @@ class Run:
         if r.returncode:
             sys.exit(f'ltr_library: {cmd[0]} failed (exit {r.returncode}); see {self.path("logs", log)}')
 
-    def py(self, script, *args, log, stdout=None, where=RECIPE):
-        self.sh([sys.executable, os.path.join(where, script), *args], log, stdout)
+    def py(self, script, *args, log, stdout=None):
+        self.sh([sys.executable, os.path.join(HERE, script), *args], log, stdout)
 
     def search(self, q, db, max_hsps, out, fields, log):
-        self.sh(['bash', os.path.join(RECIPE, 'rmb_ava.sh'), q, db, max_hsps, out, *fields], log)
+        self.sh(['bash', os.path.join(HERE, 'rmb_ava.sh'), q, db, max_hsps, out, *fields], log)
 
     def step(self, name, title, fn):
         if os.path.exists(self.done_path(name)):
@@ -194,7 +219,10 @@ class Run:
 
     def ltr_forage(self):
         self.sh([self.a.ltr_forage, self.sufr, '--reextend', '--reextend-ltr-max', 7000, '--format', 'tsv',
-                 '--domain-hmm', self.a.domain_hmm, '--library', 'lib.raw.fa', '-j', self.a.threads],
+                 '--domain-hmm', self.a.domain_hmm, '--library', 'lib.raw.fa', '-j', self.a.threads,
+                 '--nail', self.a.nail, '--mmseqs', self.a.mmseqs, '--domain-tmp', self.out,
+                 *([] if self.a.no_mask_tandem else ['--mask-tandem', '--mask-tandem-out', 'tandem.bed']),
+                 *(['--mask-bed', os.path.abspath(self.a.mask_bed)] if self.a.mask_bed else [])],
                 'ltr-forage.log', stdout='cand.tsv')
         with open(self.path('lib.raw.fa')) as fi, open(self.path('lib.fa'), 'w') as fo:
             for l in fi: fo.write(l.split()[0] + '\n' if l.startswith('>') else l)
@@ -218,11 +246,11 @@ class Run:
 
     def depth(self):
         p = self.params()
-        mtx = subprocess.run(['bash', os.path.join(RECIPE, 'pick_matrix.sh'), 'depth_sample.fa'], cwd=self.out,
+        mtx = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), 'depth_sample.fa'], cwd=self.out,
                              capture_output=True, text=True, check=True).stdout.strip()
         batches = 16
         self.env['BATCHES'] = str(batches)
-        self.sh(['bash', os.path.join(BENCH, 'clean_library_rmb.sh'), 'depth_lib.fa' if self.a.stage_b else 'lib.fa', 'depth_sample.fa', 'clean', 3, p['scale'], mtx,
+        self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'depth_lib.fa' if self.a.stage_b else 'lib.fa', 'depth_sample.fa', 'clean', 3, p['scale'], mtx,
                  '--ratio', 3, '--min-depth', p['min_depth'], '--min-len', 50, '--abs-depth', p['abs_depth'], '--drop-frac', 0.7,
                  *(['--consensus', 'reps.fa'] if self.a.stage_b else [])],
                 'depth.log', threads=max(1, self.a.threads // batches))
@@ -309,6 +337,15 @@ class Run:
         self.py('family.py', 'models.fa', 'core_ava.tsv', 'library.fa', 'families.tsv', '--rule', 'and', '--cand', 'cand.tsv',
                 '--gap-aware', log='families.log')
 
+    def evidence(self):
+        a = self.a
+        self.sh([sys.executable, os.path.join(HERE, 'evidence_page.py'), self.out, self.genome, '-o', 'evidence.html',
+                 '--domain-hmm', a.domain_hmm, '--threads', a.threads, '--work', 'evidence',
+                 '--rmblastn', a.rmblastn, '--nail', a.nail, '--mmseqs', a.mmseqs,
+                 *(['--reference', os.path.abspath(a.evidence_reference)] if a.evidence_reference else [])],
+                'evidence.log', stdout='evidence.txt')
+        self.log('  ' + open(self.path('evidence.txt')).read().strip())
+
     def run(self):
         a = self.a
         self.genome = os.path.abspath(a.genome)
@@ -317,6 +354,13 @@ class Run:
         else:
             self.sufr = self.path('genome.sufr')
         t0 = time.time()
+        self.log('ltr_library.py ' + ' '.join(sys.argv[1:]))
+        with open(self.path('versions.txt'), 'w') as fh:   # what this run used, for reproducing it
+            fh.write('command\t' + ' '.join([os.path.abspath(sys.argv[0])] + sys.argv[1:]) + '\n')
+            fh.write(f'genome\t{self.genome}\nsufr_index\t{self.sufr}\ndomain_hmm\t{os.path.abspath(a.domain_hmm)}\n')
+            for k, p, flag in (('ltr-forage', a.ltr_forage, '--version'), ('rmblastn', a.rmblastn, '-version'), ('nail', a.nail, '--version'),
+                               ('mmseqs', a.mmseqs, 'version'), ('te-composer', a.te_composer, '--version'), ('sufr', a.sufr, '--version')):
+                if p: fh.write(f'{k}\t{p}\t{tool_version(p, flag)}\n')
         self.step('index', '0 index (sufr)', self.index)
         self.step('sample', '0 depth sample', self.sample)
         self.step('ltr-forage', '1-5 ltr-forage', self.ltr_forage)
@@ -335,6 +379,8 @@ class Run:
         self.step('families', '14 families', self.families)
         nrec = sum(1 for l in open(self.path('library.fa')) if l.startswith('>'))
         nfam = len({l.split('\t')[0] for l in open(self.path('families.tsv'))} - {'family'})
+        if a.evidence_page:
+            self.step('evidence', '15 evidence page', self.evidence)
         self.log(f'done: {nrec} records, {nfam} families ({time.time() - t0:.0f} s)')
 
 
@@ -344,9 +390,15 @@ def main():
     ap.add_argument('genome')
     ap.add_argument('-o', '--outdir', required=True)
     ap.add_argument('-t', '--threads', type=int, default=os.cpu_count())
-    ap.add_argument('--sufr', dest='sufr_index', help='existing sufr index of the genome (skips step 0)')
+    ap.add_argument('--sufr', dest='sufr_index', help='existing sufr index of the genome (skips step 0; default: '
+                    '<genome>.sufr beside the genome when it exists, with .fa/.fasta/.fna dropped)')
     ap.add_argument('--tier', choices=('pbs', 'strict'), default='pbs')
     ap.add_argument('--from', dest='from_step', choices=STEPS, help='rerun from this step on')
+    d = ap.add_argument_group('detection')
+    d.add_argument('--no-mask-tandem', action='store_true',
+                   help='search tandem arrays for seeds too (by default runs of short-period sequence >= 1 kb are '
+                        'masked: a T2T assembly\'s satellites otherwise dominate the run; gorilla 4.5 h / 94 GB -> 81 min / 10 GB)')
+    d.add_argument('--mask-bed', metavar='BED', help='also mask these intervals (sequence name, 0-based start, end)')
     g = ap.add_argument_group('depth sample and floors')
     g.add_argument('--sample-above', type=float, default=200, help='sample genomes over this many non-N Mb (200)')
     g.add_argument('--sample-frac', type=float, default=0.1)
@@ -360,25 +412,37 @@ def main():
     m.add_argument('--stage-a', action='store_true',
                    help='depth-clean and re-cluster every element (the older flow) instead of clustering the raw library '
                         'first and representing clusters >= --min-cons by their consensus (stage B, the default)')
-    m.add_argument('--stage-b', action='store_true', help=argparse.SUPPRESS)   # the default now; kept for old commands
     m.add_argument('--no-flank', action='store_true', help='skip the segmental-duplication flank filter')
+    e = ap.add_argument_group('evidence page')
+    e.add_argument('--evidence-page', action='store_true', help='also write evidence.html: one dossier per family')
+    e.add_argument('--evidence-reference', metavar='LIB', help='curated library to measure each family against on the page')
     t = ap.add_argument_group('programs and data')
     t.add_argument('--ltr-forage', dest='ltr_forage')
     t.add_argument('--sufr-bin', dest='sufr')
     t.add_argument('--rmblastn')
     t.add_argument('--te-composer', dest='te_composer')
+    t.add_argument('--nail')
+    t.add_argument('--mmseqs')
     t.add_argument('--domain-hmm', default=os.environ.get('HMM', '/usr/local/LTR_retriever-2.9.0/database/TEfam.hmm'))
     t.add_argument('--word', type=int, default=12, help='rmblastn seed word for the library all-vs-all (12)')
     a = ap.parse_args()
+    if not a.sufr_index:
+        idx = re.sub(r'\.(fa|fasta|fna)(\.gz)?$', '', a.genome) + '.sufr'
+        if os.path.isfile(idx): a.sufr_index = idx
     a.ltr_forage = find_tool(a.ltr_forage, 'LTRFORAGE', 'ltr-forage', [os.path.join(ROOT, 'target', 'release', 'ltr-forage')])
     a.rmblastn = find_tool(a.rmblastn, 'RMBLASTN', 'rmblastn',
-                           [os.path.join(ROOT, '..', '..', 'rmblast-port', 'rmblast', 'target', 'release', 'rmblastn')],
-                           check='Rust port')
-    if a.stage_a and a.stage_b: sys.exit('ltr_library: --stage-a and --stage-b are exclusive')
+                           ['/usr/local/rmblast/bin/rmblastn', os.path.join(ROOT, '..', '..', 'rmblast-port', 'rmblast', 'target', 'release', 'rmblastn')],
+                           check='Rust port', min_version=(3, 0, 9), flag='-version')
+    a.nail = find_tool(a.nail, 'NAIL', 'nail', ['/usr/local/nail/nail'], min_version=(0, 7, 1))
+    a.mmseqs = find_tool(a.mmseqs, 'MMSEQS', 'mmseqs', ['/usr/local/mmseqs2/bin/mmseqs'])
+    v = subprocess.run([a.rmblastn, '-version'], capture_output=True, text=True).stdout.split()
+    if v[1:2] == ['3.0.10'] and 'MT_MODE' not in os.environ:
+        os.environ['MT_MODE'] = '0'   # 3.0.10's streaming --mt-mode 1 can deadlock (fixed in 3.0.11)
     a.stage_b = not a.stage_a and a.min_cons >= 2   # stage B needs consensus representatives
     if a.min_cons > 0:
         a.te_composer = find_tool(a.te_composer, 'TE_COMPOSER', 'te-composer',
-                                  [os.path.join(ROOT, '..', '..', 'dfam-curator', 'target', 'release', 'te-composer')])
+                                  [os.path.join(ROOT, '..', '..', 'dfam-curator', 'target', 'release', 'te-composer')],
+                                  min_version=(0, 6, 6))
     if not a.sufr_index:
         a.sufr = find_tool(a.sufr, 'SUFR', 'sufr', [os.path.join(ROOT, '..', 'sufr', 'target', 'release', 'sufr')])
     if not os.path.isfile(a.domain_hmm):

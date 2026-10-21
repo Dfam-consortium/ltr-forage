@@ -56,7 +56,7 @@ annotated boundaries, against 419 of 1,902 without it, and adds about ten
 seconds to the run.
 
 `--domain-hmm` searches each candidate's six-frame translation against a
-HMMER3 profile file in process, using `libnail`, and reports whether the hits
+HMMER3 profile file with nail, and reports whether the hits
 belong to LTR retrotransposon proteins or to other transposon and host
 proteins. On hg38 with LTR_retriever's TEfam profiles, a hit of LTR order
 marks 68% of the RepeatMasker-annotated elements and 0.5% of the other
@@ -240,30 +240,33 @@ hg38, 95% are pairs of SINEs, simple repeats or other similar sequence a few
 kb apart. Of the signals we measured on hg38, rice and Arabidopsis, a
 retrotransposon protein domain in the internal region separates the real
 elements best. `--domain-hmm FILE` searches each candidate's six-frame
-translation against a HMMER3 file of profile HMMs in process, using
-`libnail`'s implementation of HMMER's profile scoring. LTR_retriever's
+translation against a HMMER3 file of profile HMMs with
+[nail](https://github.com/TravisWheelerLab/nail). LTR_retriever's
 `TEfam.hmm` (102 Pfam profiles) is the intended input; any HMMER3 amino-acid
 profile file works.
 
 ltr-forage translates each element plus `--domain-flank` bases (default 50)
-on each side in six frames, with stop codons as X. For every frame and
-profile it scores each diagonal that shares a 3-mer with the profile's
-consensus sequence as an ungapped alignment against the profile's match
-emissions; when the best diagonal reaches 18 bits, `libnail` runs the
-Forward algorithm over a band of rows around it, applies its composition-bias
-correction, and converts the score to an E-value with the profile's own
-statistics, taking six frames per candidate as the database size, as
-hmmsearch would. Hits with an E-value at or below `--domain-evalue`
-(default 0.05) count. The seeding replaces the MMseqs2 stage nail's own
-pipeline uses; on chr22 it keeps 97% of the pairs a full Forward pass would
-report at that threshold while passing 7% of all pairs. On the same chr22
-candidates ltr-forage finds 39 of the 43 domain hits hmmsearch reports, with
-E-values within a few fold, and adds 16 more, mostly near the threshold. On
-hg38 the search scores 25.5 million frame-profile pairs, seeds 1.7 million
-of them, and takes 27 minutes on 64 threads, most of it in `libnail`'s
-Forward pass. We did not time hmmsearch on the same input; its SIMD filters
-make it likely faster, so a stronger prefilter is the next thing to try if
-the run time matters.
+on each side in six frames, with stop codons as X, writes the frames as a
+protein FASTA, and searches it with nail's full pipeline (MMseqs2 seeds, cloud
+search, Forward, composition-bias correction), taking six frames per
+candidate as the database size for the E-value, as hmmsearch would, and
+with nail's seed filter at P = 0.01 instead of its default 1e-4 (twice the
+time, half as many weak hits lost against hmmsearch). Each LTR
+is searched alone in the same run (see the coding-LTR veto below). Hits with
+an E-value at or below `--domain-evalue` (default 0.05) count. `nail` and
+`mmseqs` are found on PATH or given with `--nail` and `--mmseqs`; the frames
+and nail's databases go to a subdirectory of `--domain-tmp` (default: the
+system temp directory), removed afterwards.
+
+On rice (39,924 frames, TEfam.hmm's 102 profiles, 8 threads) nail takes 36 s
+and 206 CPU seconds at its default seed filter (70 s and 467 at 0.01),
+hmmsearch 49 s and 250 CPU seconds, and the in-process
+`libnail` search ltr-forage used before (its own 3-mer diagonal seeds, then
+Forward on a band of rows) about 18,000 CPU seconds. At E ≤ 1e-5, 4,043
+candidates have a nail hit and 4,044 a hmmsearch hit; each finds about 40
+the other misses, against 95 hmmsearch candidates the in-process search
+missed. The whole ltr-forage run on rice drops from 825 s to 106 s on 16
+threads; it keeps 3,898 elements instead of 3,878.
 
 The hits are classified as LTR_retriever's `annotate_TE.pl` does: profiles
 belong to an LTR list or a not-LTR list (DNA transposons, LINEs, helitrons,
@@ -272,8 +275,7 @@ the other list `notLTR`, both `mixture`, and hits on neither list `NA`.
 Superfamily is `Gypsy` when Copia-list hits are fewer than 0.3 of the
 Gypsy-list hits, `Copia` when Gypsy-list hits are fewer than 0.9 of the
 Copia-list hits, and strand `+` or `-` when hits on the other strand are
-fewer than 0.4 of those on it. The HMMER3
-reader is adapted from nail's, under its BSD-3-Clause licence.
+fewer than 0.4 of those on it.
 
 ### Phase 6 — Decision and library (`--keep`, `--library`)
 
@@ -513,13 +515,18 @@ insertion order would make.
 - Rust toolchain ≥ 1.80 ([rustup](https://rustup.rs) recommended)
 - The `sufr` tool for building `.sufr` index files
   ([TravisWheelerLab/sufr](https://github.com/TravisWheelerLab/sufr))
+- For the domain search (`--domain-hmm`): `nail` ≥ 0.7.1
+  ([TravisWheelerLab/nail](https://github.com/TravisWheelerLab/nail)) and
+  MMseqs2 (`mmseqs`), which nail seeds with
 
 For the family-library driver (`pipeline/ltr_library.py`) also:
 
 - Python ≥ 3.8 with numpy
 - The Rust port of RMBlast, `rmblastn` ≥ 3.0.9
   ([Dfam-consortium/rmblast](https://github.com/Dfam-consortium/rmblast));
-  NCBI's C++ `rmblastn` does not take the options the driver uses
+  NCBI's C++ `rmblastn` does not take the options the driver uses; 3.0.11 or later
+  is recommended (3.0.10's streaming `--mt-mode 1` can deadlock, and the driver
+  falls back to `--mt-mode 0` with it)
 - `te-composer` from dfam-curator ≥ 0.6.6 (consensus models)
 - An HMMER3 profile file of TE proteins for the domain search, such as
   LTR_retriever's `TEfam.hmm`
@@ -593,6 +600,9 @@ Domain search options:
                             translation against it and report order, superfamily and strand
       --domain-evalue <E>   E-value threshold for a domain hit [default: 0.05]
       --domain-flank <BP>   Bases added on each side of the element before translation [default: 50]
+      --nail <PATH>         nail binary (a path, or a name on PATH) [default: nail]
+      --mmseqs <PATH>       MMseqs2 binary nail seeds with [default: mmseqs]
+      --domain-tmp <DIR>    Directory for the domain search's scratch files [default: system temp dir]
       --keep-coding-ltrs    Keep candidates with a polyprotein domain hit inside an LTR (by default
                             they are vetoed: an LTR does not encode the polyprotein, so the hit
                             means the "LTR" is internal sequence)
@@ -740,16 +750,21 @@ candidates into a family library for RepeatMasker or RepeatModeler's
 LTRPipeline:
 
 ```bash
-pipeline/ltr_library.py genome.fa -o out -t 32 \
-    --domain-hmm /path/to/TEfam.hmm
+pipeline/ltr_library.py genome.fa -o out -t 32
 ```
 
-It finds `ltr-forage`, `sufr`, `rmblastn` and `te-composer` from the
-`--ltr-forage`, `--sufr-bin`, `--rmblastn` and `--te-composer` options, then
-the `LTRFORAGE`, `SUFR`, `RMBLASTN` and `TE_COMPOSER` environment variables,
-then `PATH`, then checkouts next to this one.  `--sufr` reuses an existing
-index of the genome.  The driver also runs scripts from `eval/benchmarks/`,
-so it is run from a full checkout.
+It finds `ltr-forage`, `sufr`, `rmblastn`, `te-composer`, `nail` and `mmseqs`
+from the `--ltr-forage`, `--sufr-bin`, `--rmblastn`, `--te-composer`, `--nail`
+and `--mmseqs` options, then the `LTRFORAGE`, `SUFR`, `RMBLASTN`,
+`TE_COMPOSER`, `NAIL` and `MMSEQS` environment variables, then `PATH`, then
+the usual install locations and checkouts next to this one. It skips a
+binary older than it needs (rmblastn 3.0.9, te-composer 0.6.6, nail 0.7.1),
+so an old install on `PATH` does not shadow a newer one. The protein
+profiles default to LTR_retriever's `TEfam.hmm` (`--domain-hmm`). A sufr
+index beside the genome (`genome.sufr` for `genome.fa`) is used when it
+exists; `--sufr` names another. Each run writes the command and every
+program's path and version to `out/versions.txt`, and its step times to
+`out/steps.log`. The step scripts live beside the driver in `pipeline/`.
 
 ### Steps
 
@@ -799,6 +814,31 @@ skips finished steps; `--from STEP` reruns from a step on.
 | `families.tsv` | Each model's family, origin element, kind, length, status and class |
 | `cand.tsv` | ltr-forage's per-candidate table, with every value behind its decision (see [Per-candidate table](#per-candidate-table---format-tsv)) |
 | `sd_clusters.tsv` | Clusters tested for segmental duplication, and the call |
+| `evidence.html` | With `--evidence-page`: one dossier per family (see below) |
+
+### Evidence page
+
+`--evidence-page` writes `evidence.html`, a self-contained page with one
+dossier per family, drawn from the family's founding element: LTRs, assembly
+gaps, TSD, primer binding site, polypurine tract and protein domains on a
+genome-browser style track, the 5′ and 3′ LTR alignment, and the family's
+full-length copies and the sequences they lie on.  Each family gets a
+triage verdict (likely novel or well supported, known family, weak
+evidence, possible artifact) with the evidence behind it.
+`--evidence-reference LIB` adds the nearest family in a curated library.
+
+Run by hand, `pipeline/evidence_page.py` also takes a RepeatMasker run of
+the genome with the library (`--mask`), the curated annotation
+(`--standard`) and another tool's mask (`--other NAME=OUT`).  It then shows
+each family's masking inside and outside the curated LTR annotation and how
+much of the rest the other tool finds too, and `--families top-fp:N`
+selects the families with the most masking outside it:
+
+```bash
+pipeline/evidence_page.py out genome.fa -o fp.html --families top-fp:30 \
+    --reference curated.fa --mask genome.fa.out --standard curated.fa.out \
+    --other HiRepEat=hirepeat.fa.out
+```
 
 ### Accuracy
 

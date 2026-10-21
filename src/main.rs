@@ -16,6 +16,7 @@ mod maxpairs;
 mod pbs;
 mod reextend;
 mod stream;
+mod tandem;
 mod trna;
 mod tsd;
 mod xdrop;
@@ -152,7 +153,8 @@ struct Args {
 
     /// HMMER3 file of transposable-element protein profiles (LTR_retriever's
     /// TEfam.hmm works); each candidate's six-frame translation is searched
-    /// against it in process and the order, superfamily and strand reported
+    /// against it with nail (needs nail and MMseqs2, see --nail and
+    /// --mmseqs) and the order, superfamily and strand reported
     #[arg(long, value_name = "FILE")]
     domain_hmm: Option<String>,
 
@@ -163,6 +165,20 @@ struct Args {
     /// Bases added on each side of the element before translation
     #[arg(long, default_value_t = 50, value_name = "BP")]
     domain_flank: usize,
+
+    /// nail binary for the domain search (a path, or a name on PATH)
+    #[arg(long, default_value = "nail", value_name = "PATH")]
+    nail: String,
+
+    /// MMseqs2 binary nail seeds with (a path, or a name on PATH)
+    #[arg(long, default_value = "mmseqs", value_name = "PATH")]
+    mmseqs: String,
+
+    /// Directory for the domain search's scratch files (six-frame proteins
+    /// and nail's databases: about 2 GB for a primate genome); a
+    /// subdirectory is made and removed [default: the system temp directory]
+    #[arg(long, value_name = "DIR")]
+    domain_tmp: Option<String>,
 
     /// Keep candidates with a polyprotein domain hit inside an LTR (by
     /// default they are vetoed: an LTR does not encode the polyprotein, so
@@ -193,6 +209,12 @@ struct Args {
     #[arg(long, default_value_t = 0.99, value_name = "FRAC")]
     tandem_max: f64,
 
+    /// Run the domain searches on candidates the LTR self-repeat check has
+    /// already rejected too (their table domain columns are "." otherwise);
+    /// the decisions do not change
+    #[arg(long)]
+    domain_search_vetoed: bool,
+
     /// Skip the genome tRNA scan behind the PBS columns of --format tsv
     /// (pbs_offset is then -1 and pbs_trna, pbs_mm12, pbs_edist18 are ".")
     #[arg(long)]
@@ -218,6 +240,36 @@ struct Args {
     /// the calls as a table and exit; no SUFR index is needed
     #[arg(long, value_name = "FASTA")]
     trna_scan: Option<String>,
+
+    /// Mask tandem arrays (satellites, simple repeats) from the seed search:
+    /// runs of at least --mask-tandem-len bases where most positions repeat
+    /// within --mask-tandem-period.  The sequence itself is unchanged.  For
+    /// assemblies with centromeric and satellite arrays (T2T), where those
+    /// arrays dominate the run time
+    #[arg(long)]
+    mask_tandem: bool,
+
+    /// Longest tandem unit masked (default: 1000, kept below --mindistltr so
+    /// no LTR pair can be masked)
+    #[arg(long, value_name = "BP")]
+    mask_tandem_period: Option<usize>,
+
+    /// Shortest masked run
+    #[arg(long, default_value_t = 1000, value_name = "BP")]
+    mask_tandem_len: usize,
+
+    /// Share of periodic positions a masked run needs
+    #[arg(long, default_value_t = 0.5, value_name = "FRAC")]
+    mask_tandem_frac: f64,
+
+    /// Write the masked tandem runs to FILE (BED, 0-based half-open)
+    #[arg(long, value_name = "FILE")]
+    mask_tandem_out: Option<String>,
+
+    /// Also mask the intervals in FILE (BED: name, 0-based start, end) from
+    /// the seed search, e.g. tandem repeats from ULTRA or TRF
+    #[arg(long, value_name = "FILE")]
+    mask_bed: Option<String>,
 }
 
 // --------------------------------------------------
@@ -347,7 +399,45 @@ where
     // streaming its slice of the SA and LCP arrays from the file.  Seeds are
     // concatenated in piece order, which is the order a single sequential
     // traversal would emit them, so later tie-breaks are unaffected.
-    let wild = maxpairs::WildRuns::new(text);
+    let mut extra: Vec<(usize, usize)> = Vec::new();
+    if let Some(path) = &args.mask_bed {
+        let idx: std::collections::HashMap<&str, usize> = seq_names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+        let (mut n, mut bp, mut unknown) = (0usize, 0usize, 0usize);
+        for line in std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(path)?)) {
+            let line = line?;
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 3 || line.starts_with('#') || line.starts_with("track") { continue; }
+            let (Ok(a), Ok(b)) = (f[1].parse::<usize>(), f[2].parse::<usize>()) else { continue };
+            let Some(&k) = idx.get(f[0]) else { unknown += 1; continue };
+            let end = if k + 1 < seq_starts.len() { seq_starts[k + 1] } else { text.len() };
+            let (a, b) = (seq_starts[k] + a, (seq_starts[k] + b).min(end));
+            if a < b { extra.push((a, b)); n += 1; bp += b - a; }
+        }
+        eprintln!("Mask BED: {} interval(s), {:.1} Mb{}", n, bp as f64 / 1e6,
+                  if unknown > 0 { format!(" ({} on sequences not in the index, ignored)", unknown) } else { String::new() });
+    }
+    let wild = if args.mask_tandem {
+        let t0 = std::time::Instant::now();
+        let period = args.mask_tandem_period.unwrap_or(1000).min(args.dist_min.saturating_sub(1));
+        let runs = tandem::tandem_runs(text, tandem::TandemParams {
+            max_period: period, min_len: args.mask_tandem_len, min_frac: args.mask_tandem_frac,
+        });
+        let bp: usize = runs.iter().map(|(a, b)| b - a).sum();
+        eprintln!("Tandem mask: {} run(s), {:.1} Mb ({:.2}% of the text; unit <= {} bp; {:.1}s)",
+                  runs.len(), bp as f64 / 1e6, 100.0 * bp as f64 / text.len() as f64, period, t0.elapsed().as_secs_f64());
+        if let Some(path) = &args.mask_tandem_out {
+            use std::io::Write;
+            let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
+            for &(a, b) in &runs {
+                let k = seq_starts.partition_point(|&st| st <= a) - 1;   // runs never cross a separator
+                writeln!(w, "{}\t{}\t{}", seq_names[k], a - seq_starts[k], b - seq_starts[k])?;
+            }
+        }
+        extra.extend(runs);
+        maxpairs::WildRuns::with_extra(text, &extra)
+    } else {
+        maxpairs::WildRuns::with_extra(text, &extra)
+    };
     let n_pieces = rayon::current_num_threads() * 4;
     let pieces = stream::split_points(sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
     let per_piece: Vec<Result<Vec<ltr::Seed>>> = pieces
@@ -573,67 +663,9 @@ where
     };
     let text: &[u8] = &sf.text;
 
-    // ---- Phase 3f: protein-domain search (optional) ----
-    let domain_calls: Vec<Option<domain::DomainCall>> = if let Some(path) = &args.domain_hmm {
-        let db = domain::DomainDb::load(path)?;
-        let num_targets = 6 * final_coords.len().max(1);
-        let out: Vec<Option<domain::DomainCall>> = final_coords
-            .par_iter()
-            .zip(surviving.par_iter())
-            .map_init(|| domain::Searcher::new(&db), |searcher, (&(l1s, _, _, l2e), (c, _))| {
-                let seq_start = seq_starts[c.seq_num];
-                let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
-                let s = l1s.saturating_sub(args.domain_flank).max(seq_start);
-                let e = (l2e + args.domain_flank).min(seq_end);
-                searcher.search(&db, &text[s..=e], num_targets, args.domain_evalue).ok().map(|mut c| { c.origin = s; c })
-            })
-            .collect();
-        let mut st = domain::SearchStats::default();
-        for d in out.iter().flatten() {
-            st += d.stats;
-        }
-        eprintln!(
-            "Phase 3f: {} frame/profile pair(s), {} seeded, {} passed the Forward filter (thread time: seed {:.1}s, align {:.1}s)",
-            st.pairs, st.seeded, st.forward_passed,
-            st.seed_time.as_secs_f64(), st.align_time.as_secs_f64(),
-        );
-        let with_hits = out.iter().filter(|d| d.as_ref().map_or(false, |d| !d.hits.is_empty())).count();
-        let ltr = out.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "LTR")).count();
-        let not = out.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "notLTR" || d.order == "mixture")).count();
-        eprintln!(
-            "Phase 3f: {} profile(s); {} candidate(s) with a domain hit, {} LTR order, {} notLTR or mixture ({:.1}s elapsed)",
-            db.entries.len(), with_hits, ltr, not, t_start.elapsed().as_secs_f64(),
-        );
-        out
-    } else {
-        vec![None; surviving.len()]
-    };
-    // The same search on each LTR alone: hits to the polyprotein profiles
-    // there mean the "LTR" is internal sequence.
-    let ltr_domain_hits: Vec<Vec<String>> = if let (Some(path), false) = (&args.domain_hmm, args.keep_coding_ltrs) {
-        let db = domain::DomainDb::load(path)?;
-        let num_targets = 6 * final_coords.len().max(1);
-        let out: Vec<Vec<String>> = final_coords
-            .par_iter()
-            .map_init(|| domain::Searcher::new(&db), |searcher, &(l1s, l1e, l2s, l2e)| {
-                [&text[l1s..=l1e], &text[l2s..=l2e]]
-                    .iter()
-                    .flat_map(|ltr| searcher.search(&db, ltr, num_targets, args.domain_evalue).map(|c| c.ltr_order_hits()).unwrap_or_default())
-                    .collect()
-            })
-            .collect();
-        eprintln!(
-            "Phase 3f: {} candidate(s) with an LTR-list domain hit inside an LTR, {} with a core polyprotein domain ({:.1}s elapsed)",
-            out.iter().filter(|v| !v.is_empty()).count(),
-            out.iter().filter(|v| v.iter().any(|h| domain::is_core(h))).count(),
-            t_start.elapsed().as_secs_f64(),
-        );
-        out
-    } else {
-        vec![Vec::new(); surviving.len()]
-    };
-
-    // ---- Phase 3f2: LTR self-alignment (tandem-repeat check) ----
+    // ---- Phase 3f: LTR self-alignment (tandem-repeat check) ----
+    // First, so the domain searches below can skip what it vetoes (decide()
+    // rejects those whatever their domains).
     let self_cov: Vec<(f64, f64)> = {
         let aligner = reextend::Aligner::new()?;
         final_coords
@@ -649,6 +681,80 @@ where
         100.0 * args.tandem_max,
         t_start.elapsed().as_secs_f64(),
     );
+
+    let skip_domains: Vec<bool> = self_cov
+        .iter()
+        .map(|(a, b)| !args.domain_search_vetoed && a.max(*b) >= args.tandem_max)
+        .collect();
+
+    // ---- Phase 3f: protein-domain search (optional) ----
+    // One nail run over each candidate (element plus --domain-flank) and,
+    // unless --keep-coding-ltrs, each LTR alone: hits to the polyprotein
+    // profiles inside an LTR mean the "LTR" is internal sequence.
+    let n = final_coords.len();
+    let (domain_calls, ltr_domain_hits): (Vec<Option<domain::DomainCall>>, Vec<Vec<String>>) = if let Some(path) = &args.domain_hmm {
+        let t0 = std::time::Instant::now();
+        let nail = domain::Nail {
+            nail: domain::find_program(&args.nail).context("the domain search needs nail (--nail)")?,
+            mmseqs: domain::find_program(&args.mmseqs).context("the domain search needs MMseqs2 (--mmseqs)")?,
+            threads: rayon::current_num_threads(),
+            work: args.domain_tmp.as_ref().map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
+                .join(format!("ltr-forage-nail-{}", std::process::id())),
+        };
+        let origins: Vec<usize> = final_coords
+            .iter()
+            .zip(surviving.iter())
+            .map(|(&(l1s, _, _, _), (c, _))| l1s.saturating_sub(args.domain_flank).max(seq_starts[c.seq_num]))
+            .collect();
+        let mut seqs: Vec<Option<&[u8]>> = Vec::with_capacity(3 * n);
+        for ((&(_, _, _, l2e), (c, _)), (&s, &skip)) in final_coords.iter().zip(surviving.iter()).zip(origins.iter().zip(skip_domains.iter())) {
+            let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+            seqs.push((!skip).then(|| &text[s..=(l2e + args.domain_flank).min(seq_end)]));
+        }
+        let ltrs = !args.keep_coding_ltrs;
+        if ltrs {
+            for (&(l1s, l1e, l2s, l2e), &skip) in final_coords.iter().zip(skip_domains.iter()) {
+                seqs.push((!skip).then(|| &text[l1s..=l1e]));
+                seqs.push((!skip).then(|| &text[l2s..=l2e]));
+            }
+        }
+        let mut calls = domain::search(&nail, std::path::Path::new(path), &seqs, 6 * n.max(1), args.domain_evalue)?;
+        let ltr_hits: Vec<Vec<String>> = if ltrs {
+            calls[n..]
+                .chunks(2)
+                .map(|p| p.iter().flatten().flat_map(|c| c.ltr_order_hits()).collect())
+                .collect()
+        } else {
+            vec![Vec::new(); n]
+        };
+        calls.truncate(n);
+        for (c, &o) in calls.iter_mut().zip(origins.iter()) {
+            if let Some(c) = c {
+                c.origin = o;
+            }
+        }
+        let n_skip = skip_domains.iter().filter(|&&x| x).count();
+        if n_skip > 0 {
+            eprintln!("Phase 3f: domain search skips {} candidate(s) vetoed by LTR self-repeat (--domain-search-vetoed searches them)", n_skip);
+        }
+        let with_hits = calls.iter().filter(|d| d.as_ref().map_or(false, |d| !d.hits.is_empty())).count();
+        let ltr = calls.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "LTR")).count();
+        let not = calls.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "notLTR" || d.order == "mixture")).count();
+        eprintln!(
+            "Phase 3f: nail domain search ({:.1}s): {} candidate(s) with a domain hit, {} LTR order, {} notLTR or mixture ({:.1}s elapsed)",
+            t0.elapsed().as_secs_f64(), with_hits, ltr, not, t_start.elapsed().as_secs_f64(),
+        );
+        if ltrs {
+            eprintln!(
+                "Phase 3f: {} candidate(s) with an LTR-list domain hit inside an LTR, {} with a core polyprotein domain",
+                ltr_hits.iter().filter(|v| !v.is_empty()).count(),
+                ltr_hits.iter().filter(|v| v.iter().any(|h| domain::is_core(h))).count(),
+            );
+        }
+        (calls, ltr_hits)
+    } else {
+        (vec![None; n], vec![Vec::new(); n])
+    };
 
     // ---- Phase 3g: decisions and the library ----
     if args.internal_gap_max.is_some() && !args.internal_stats {

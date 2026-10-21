@@ -8,7 +8,7 @@
 # Env: THREADS (default 32), PA (RepeatMasker -pa, default 8).
 set -eo pipefail
 AD=$(realpath $1); RUN=$(realpath $2); G=$3; STD=$4; CUR=$5; ART=$6; shift 6
-B=$(cd "$(dirname "$0")/.." && pwd); R=$B/recipe
+B=$(cd "$(dirname "$0")/.." && pwd); R=$(cd "$B/../../pipeline" && pwd)
 RM="/usr/local/RepeatMasker/RepeatMasker -e rmblast -no_is -norna -nolow"
 for X in "$@"; do (
   mkdir -p $AD/$X; cd $AD/$X

@@ -4,7 +4,8 @@
 Usage: family_recovery.py <curated.fa> <library.fa> [--min-identity 80] [--out table.tsv]
 
 Every curated sequence (named <family>_LTR... or <family>_INT...) is aligned
-against the candidate library with blastn (dc-megablast).  For each curated
+against the candidate library with the Rust rmblastn (pipeline/rmb_ava.sh:
+RepeatMasker -lib settings, E <= 1e-10; RMBLASTN, THREADS from the environment).  For each curated
 sequence the script takes the union of the HSPs at or above the identity cut
 and reports the fraction of it covered, then per family the best LTR and
 best INT coverage.  The summary counts families whose LTR, INT, or both reach
@@ -12,11 +13,12 @@ best INT coverage.  The summary counts families whose LTR, INT, or both reach
 """
 import sys, os, re, subprocess, tempfile, collections, argparse
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+
 ap = argparse.ArgumentParser()
 ap.add_argument('curated'); ap.add_argument('library')
 ap.add_argument('--min-identity', type=float, default=80.0)
 ap.add_argument('--out', default=None)
-ap.add_argument('--task', default='dc-megablast')
 a = ap.parse_args()
 
 def read_fasta(p):
@@ -43,12 +45,12 @@ def family_kind(name):
 
 cur = read_fasta(a.curated)
 with tempfile.TemporaryDirectory() as td:
-    db = os.path.join(td, 'lib')
-    subprocess.run(['makeblastdb', '-in', a.library, '-dbtype', 'nucl', '-out', db], check=True, capture_output=True)
-    res = subprocess.run(['blastn', '-task', a.task, '-query', a.curated, '-db', db, '-evalue', '1e-10',
-                          '-max_target_seqs', '100', '-max_hsps', '50', '-num_threads', '8',
-                          '-outfmt', '6 qseqid sseqid pident length qstart qend sstart send bitscore'],
-                         check=True, capture_output=True, text=True).stdout
+    out = os.path.join(td, 'hits.tsv')
+    env = dict(os.environ, THREADS=os.environ.get('THREADS', '8'))
+    subprocess.run(['bash', os.path.join(HERE, '..', '..', 'pipeline', 'rmb_ava.sh'), a.curated, a.library, '50', out,
+                    'qseqid', 'sseqid', 'pident', 'length', 'qstart', 'qend', 'sstart', 'send', 'bitscore'],
+                   check=True, capture_output=True, env=env)
+    res = open(out).read()
 hsps = collections.defaultdict(list)
 for l in res.splitlines():
     q, s, pid, ln, qs, qe, ss, se, bits = l.split('\t')

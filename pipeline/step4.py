@@ -5,7 +5,8 @@
 import os, csv, collections, sys, json
 int_hits, ltr_hits = sys.argv[1], sys.argv[2]
 elem_recs={}; elems=[]
-for r in csv.DictReader(open(os.environ.get('TSV','../rice.m5.tsv')),delimiter='\t'):
+if 'TSV' not in os.environ: sys.exit('step4.py: set TSV to the ltr-forage table (cand.tsv)')
+for r in csv.DictReader(open(os.environ['TSV']),delimiter='\t'):
     if r['keep']!='1': continue
     s=r['seq']; e=(s,int(r['elem_start']),int(r['elem_end'])); elems.append(e)
     ls,le,rs,re_=int(r['lltr_start']),int(r['lltr_end']),int(r['rltr_start']),int(r['rltr_end'])
@@ -37,7 +38,8 @@ for path,kind in ((int_hits,'I'),(ltr_hits,'L')):
             d=cov[(a,b)]; old=d.get(kind,(0,0,0))
             if ca>old[0] or (ca==old[0] and p['bits']>old[2]): d[kind]=(ca,cb,p['bits'])
 best={}
-for l in open(os.environ.get('JIANG','../lib_vs_jiang.tsv')):
+# optional: library-vs-curated hits (JIANG) label elements by curated family for the report
+for l in (open(os.environ['JIANG']) if os.environ.get('JIANG') else ()):
     q,s,pid,ln,qs,qe,ql,bits=l.split('\t'); q=q.split('#')[0]
     if float(pid)<80 or int(ln)<0.5*int(ql): continue
     if q not in best or float(bits)>best[q][1]: best[q]=(s.split('#')[0].split('_')[0],float(bits))

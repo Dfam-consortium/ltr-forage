@@ -261,6 +261,21 @@ impl WildRuns {
         WildRuns { runs }
     }
 
+    /// Wildcard runs plus extra masked runs (sorted, disjoint), merged.
+    pub fn with_extra(text: &[u8], extra: &[(usize, usize)]) -> Self {
+        let mut all = WildRuns::new(text).runs;
+        all.extend_from_slice(extra);
+        all.sort_unstable();
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (a, b) in all {
+            match runs.last_mut() {
+                Some(l) if a <= l.1 => l.1 = l.1.max(b),
+                _ => runs.push((a, b)),
+            }
+        }
+        WildRuns { runs }
+    }
+
     #[inline]
     pub fn cap(&self, p: usize) -> usize {
         let k = self.runs.partition_point(|&(_, e)| e <= p);

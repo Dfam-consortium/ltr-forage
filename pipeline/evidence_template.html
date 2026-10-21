@@ -1,0 +1,328 @@
+<title>LTR Family Evidence</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
+<style>
+/* Layout: one reading column; a summary table, then one dossier per family, drawn from its founding element as a genome-browser track. */
+:root {
+  --bg: #f6f7f8; --surface: #ffffff; --fg: #1d2329; --muted: #5d6873; --rule: #d9dee3;
+  --ltr: #2f5d8a; --int: #8c97a1; --tsd: #c27a12; --gap: #b9c0c7; --accent: #2f5d8a;
+  --gag: #3f8f5a; --pr: #8a6d1f; --inte: #7a4fa0; --rt: #b8433a; --rh: #c46a8f; --other: #6c7a86;
+  --sim-lo: #dbe6f0; --sim-hi: #1f4a73;
+  --ok: #2f7d4f; --ok-bg: #e3f1e8; --warn: #9a6400; --warn-bg: #fbefd9; --bad: #a33a32; --bad-bg: #f7e1df;
+  --display: "Source Serif 4", Georgia, serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14181c; --surface: #1b2026; --fg: #e3e7eb; --muted: #9aa5b0; --rule: #2e353d;
+  --ltr: #6fa3d6; --int: #6b7682; --tsd: #e0a040; --gap: #4a525b; --accent: #6fa3d6;
+  --gag: #63b47e; --pr: #c9a54a; --inte: #a982cc; --rt: #e0716a; --rh: #df8fb0; --other: #94a1ad;
+  --sim-lo: #26384a; --sim-hi: #8fc0ec;
+  --ok: #7ccf9a; --ok-bg: #1d3326; --warn: #e8b55c; --warn-bg: #3a2e17; --bad: #ef8a82; --bad-bg: #3d2120;
+  color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #14181c; --surface: #1b2026; --fg: #e3e7eb; --muted: #9aa5b0; --rule: #2e353d;
+  --ltr: #6fa3d6; --int: #6b7682; --tsd: #e0a040; --gap: #4a525b; --accent: #6fa3d6;
+  --gag: #63b47e; --pr: #c9a54a; --inte: #a982cc; --rt: #e0716a; --rh: #df8fb0; --other: #94a1ad;
+  --sim-lo: #26384a; --sim-hi: #8fc0ec;
+  --ok: #7ccf9a; --ok-bg: #1d3326; --warn: #e8b55c; --warn-bg: #3a2e17; --bad: #ef8a82; --bad-bg: #3d2120;
+  color-scheme: dark; }
+
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--body); }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 40px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: 2.1rem; }
+h2 { font-size: 1.45rem; }
+h3 { font-size: 1.05rem; font-family: var(--body); font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.lede { display: grid; gap: 14px; }
+.eyebrow { font: 500 0.75rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.funnel { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin-top: 6px; }
+.funnel div { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 10px 14px; min-width: 0; flex: 1 1 150px; }
+.funnel b { display: block; font: 600 1.35rem/1.1 var(--body); font-variant-numeric: tabular-nums; }
+.funnel span { font-size: 0.82rem; color: var(--muted); }
+.funnel .bad b { color: var(--bad); }
+.note { border-left: 3px solid var(--warn); background: var(--warn-bg); padding: 12px 16px; border-radius: 0 6px 6px 0; max-width: 78ch; }
+.note p { max-width: none; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; white-space: nowrap; }
+th { font: 500 0.72rem/1.2 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+td.wrapc { white-space: normal; min-width: 180px; }
+a { color: var(--accent); }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip { display: inline-block; font: 500 0.74rem/1 var(--body); padding: 4px 8px; border-radius: 999px; white-space: nowrap; }
+.chip.ok { color: var(--ok); background: var(--ok-bg); }
+.chip.warn { color: var(--warn); background: var(--warn-bg); }
+.chip.bad { color: var(--bad); background: var(--bad-bg); }
+.case { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 22px 22px 24px; display: grid; gap: 18px; scroll-margin-top: 16px; }
+.case header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.case header h2 { font-size: 1.2rem; font-family: var(--mono); font-weight: 500; overflow-wrap: anywhere; }
+.verdict { max-width: 78ch; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px 28px; }
+.grid2 > section { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; align-content: start; }
+.grid2 > section > * { min-width: 0; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; font-size: 0.88rem; }
+dt { color: var(--muted); }
+dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.seq { font: 0.8rem/1.5 var(--mono); overflow-x: auto; white-space: pre; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 8px 10px; }
+.seq .t { color: var(--tsd); font-weight: 500; text-decoration: underline; }
+.seq .l { color: var(--ltr); font-weight: 500; }
+.seq .m { background: var(--warn-bg); color: var(--warn); font-weight: 500; }
+.seq .dim { color: var(--muted); }
+details summary { cursor: pointer; color: var(--accent); font-size: 0.86rem; }
+details pre { font: 0.74rem/1.35 var(--mono); overflow-x: auto; background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 10px; margin: 8px 0 0; }
+svg text { font-family: var(--mono); fill: var(--fg); }
+svg .lab { fill: var(--muted); font-size: 11px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.78rem; color: var(--muted); }
+.legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.simtab td:first-child { color: var(--muted); }
+.trnabar { display: grid; grid-template-columns: max-content 1fr max-content; gap: 4px 10px; align-items: center; font-size: 0.84rem; max-width: 640px; }
+.trnabar .bar { height: 10px; border-radius: 2px; background: var(--accent); min-width: 2px; }
+.trnabar span:last-child, .trnabar .n { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.methods { display: grid; gap: 10px; font-size: 0.88rem; color: var(--muted); }
+.methods p { max-width: 80ch; }
+@media (max-width: 520px) { h1 { font-size: 1.6rem; } .case { padding: 16px; } }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filters button { font: 500 0.8rem/1 var(--body); padding: 7px 12px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface); color: var(--fg); cursor: pointer; }
+.filters button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--bg); }
+.filters button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reasons { margin: 0; padding-left: 18px; display: grid; gap: 2px; font-size: 0.88rem; max-width: 78ch; }
+.split { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--rule); max-width: 260px; }
+.split i { display: block; height: 100%; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+<div class="wrap">
+  <div class="lede">
+    <div class="eyebrow" id="eyebrow"></div>
+    <h1 id="title"></h1>
+    <p id="intro"></p>
+    <div class="funnel" id="funnel"></div>
+    <div class="note" id="note" hidden><p id="notetext"></p></div>
+  </div>
+
+  <section style="display:grid;gap:12px">
+    <h2>Families</h2>
+    <p>Each family is shown through its founding element: the genome copy its first internal model was taken from. The verdict is computed from the evidence below it, as a triage aid. It is not a curation call.</p>
+    <div class="filters" id="filters" role="group" aria-label="Show families by verdict"></div>
+    <div class="scroll"><table id="summary"></table></div>
+  </section>
+
+  <section style="display:grid;gap:12px" id="pbssec">
+    <h2>Primer tRNAs</h2>
+    <p id="pbslede"></p>
+    <div class="trnabar" id="trnabar"></div>
+  </section>
+
+  <div id="cases" style="display:grid;gap:28px"></div>
+
+  <section class="methods">
+    <h2 style="color:var(--fg)">How these were measured</h2>
+    <p><b>Structure</b> (TSD, end motif, PBS, PPT, LTR identity) comes from ltr-forage's candidate table. The TSD is the duplicated sequence just outside both LTRs: an exact repeat, or a 5–6 bp repeat with one mismatch. The primer binding site is ltr-forage's search for the 3′ end of one of the genome's own tRNA genes (ARAGORN's method) just inside the 5′ LTR, on either strand. The PPT is the most purine-rich 15 bp window in the 30 bp before the 3′ LTR; 11 or more purines is suggestive.</p>
+    <p><b>Domains</b> come from hmmscan of six-frame ORFs of at least 60 aa against the TE protein profiles; overlapping weaker hits are dropped. Domains on both strands of one element usually mean one element nested in another.</p>
+    <p><b>Copies.</b> Full-length copies are the elements ltr-forage found and clustered into this family, and the sequences they lie on. When the genome was masked with the library, near-full-length copies are hits covering at least half of a model.</p>
+    <p id="m_ref"></p>
+    <p id="m_std"></p>
+    <p><b>Verdicts.</b> <i>Possible artifact</i>: domains on both strands, a segmental-duplication flag, or two or three copies all on one sequence with few genome copies elsewhere. <i>Known family</i>: the LTR or internal region is at least 80% identical over 80% of its length to a reference family. <i>Likely novel</i> (or <i>well supported</i> without a reference): three lines of evidence among two or more protein domains, a TSD of 4 bp or longer, TG…CA ends, a PBS, full-length copies on several sequences and ten or more near-full-length genome copies; or two of them when one is two or more domains. Elements without domains can qualify: non-autonomous elements keep the structure but lose the coding region. Everything else is <i>weak evidence</i>.</p>
+  </section>
+</div>
+
+<script>
+const CASES = /*DATA*/;
+const META = /*META*/;
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
+const pct = v => (v * 100).toFixed(0) + "%";
+const mb = v => (v / 1e6).toFixed(2) + " Mb";
+const fam = t => t ? t.replace(/_(LTR|INT)$/, "") : "–";
+const domClass = n => /gag|zf-CCHC|DUF4219|Retrotran_gag/i.test(n) ? "gag" : /asp_prot|RVP|pepsin|Peptidase/i.test(n) ? "pr" : /rve|integr/i.test(n) ? "inte" : /RVT|RT_|Transcrip/i.test(n) ? "rt" : /RNase|RNaseH/i.test(n) ? "rh" : "other";
+const best = arr => arr && arr.length ? arr[0] : null;
+const T = META.totals || {};
+const hasStd = T.tp !== undefined, hasRef = !!META.reference, hasMask = CASES.some(c => c.mask);
+
+document.getElementById("eyebrow").textContent = `ltr-forage · ${META.run} · ${META.genome}`;
+document.getElementById("title").textContent = META.title;
+document.getElementById("intro").textContent = `${META.shown} of the library's ${META.families_total} families` +
+  (META.selection === "all" ? "." : META.selection.startsWith("top-fp") ? `: those with the most masking outside the curated LTR annotation.` : ": the families asked for.") +
+  (hasRef ? ` The reference library is ${META.reference}.` : "");
+
+const counts = {};
+CASES.forEach(c => counts[c.verdict[1].replace(/ \(.*/, "")] = (counts[c.verdict[1].replace(/ \(.*/, "")] || 0) + 1);
+const tiles = [[META.shown, "families shown"]];
+if (hasStd) {
+  tiles.push([mb(T.fp), "masked outside the curated LTR annotation", "bad"]);
+  tiles.push([pct(T.fp_unannotated / Math.max(1, T.fp)), "of that is unannotated by the curated library"]);
+  if (T.other) tiles.push([pct(T.fp_other / Math.max(1, T.fp)), `of it ${T.other} masks too`]);
+}
+Object.entries(counts).forEach(([k, v]) => tiles.push([v, k.toLowerCase()]));
+document.getElementById("funnel").innerHTML = tiles.map(([n, t, cls]) => `<div class="${cls || ""}"><b>${esc(n)}</b><span>${esc(t)}</span></div>`).join("");
+if (hasStd) {
+  document.getElementById("note").hidden = false;
+  document.getElementById("notetext").innerHTML = `<b>False positives here are measured against a curated library that may be incomplete.</b> A real family the curators missed scores as false-positive masking, exactly like an artifact. The structural and coding evidence below is what tells them apart` +
+    (T.other ? `; masking that ${esc(T.other)} also finds independently is further support.` : ".");
+}
+document.getElementById("m_ref").innerHTML = hasRef ? `<b>Nearest reference family:</b> the 5′ LTR and the internal region were each searched with blastn (E ≤ 1e-5) against ${esc(META.reference)}, and the internal region with tblastx against its internal models. Identity is weighted over all alignments to that family; coverage is the share of the query they cover. The 5′ LTR was also searched against the rest of this library.` : `<b>No reference library was given</b>, so nearness to known families is not shown. The 5′ LTR was searched against the rest of this library.`;
+document.getElementById("m_std").innerHTML = hasStd ? `<b>Masking.</b> Bases each family's models mask in the genome, split into those inside the curated LTR annotation (TP) and outside it (FP). FP bases under another annotation are labelled with its class; the rest are unannotated.` + (T.other ? ` "${esc(T.other)} too" is the share of the FP bases that ${esc(T.other)}'s library also masks.` : "") : "";
+
+const P = META.pbs;
+if (P && P.top && P.top.length) {
+  document.getElementById("pbslede").textContent = `${P.with_pbs.toLocaleString()} of the ${P.elements.toLocaleString()} elements ltr-forage kept (${(100 * P.with_pbs / Math.max(1, P.elements)).toFixed(0)}%) have a primer binding site for one of the genome's own tRNAs. The most used primers:`;
+  const tmax = P.top[0][1];
+  document.getElementById("trnabar").innerHTML = P.top.map(([n, v]) => `<span>${esc(n)}</span><div class="bar" style="width:${(100 * v / tmax).toFixed(1)}%"></div><span class="n">${v.toLocaleString()}</span>`).join("");
+} else document.getElementById("pbssec").hidden = true;
+
+const levels = ["all", "ok", "warn", "bad"], levelName = { all: "All", ok: "Supported", warn: "Known or weak", bad: "Possible artifact" };
+let show = "all";
+try { show = localStorage.getItem("ev-filter") || "all"; } catch (e) {}
+function renderFilters() {
+  document.getElementById("filters").innerHTML = levels.map(l => {
+    const n = l === "all" ? CASES.length : CASES.filter(c => c.verdict[0] === l).length;
+    return `<button type="button" id="f-${l}" data-l="${l}" aria-pressed="${show === l}">${levelName[l]} · ${n}</button>`;
+  }).join("");
+}
+document.getElementById("filters").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  show = b.dataset.l; try { localStorage.setItem("ev-filter", show); } catch (err) {}
+  render();
+});
+
+function maskCell(c) {
+  const m = c.mask; if (!m) return "–";
+  if (!hasStd) return mb(m.bp);
+  const t = m.tp + m.fp || 1;
+  return `<div class="split" title="TP ${mb(m.tp)} · FP ${mb(m.fp)}"><i style="width:${100 * m.tp / t}%;background:var(--ok)"></i><i style="width:${100 * m.fp / t}%;background:var(--bad)"></i></div><span style="font-size:0.78rem;color:var(--muted)">${mb(m.tp)} / ${mb(m.fp)}</span>`;
+}
+
+function diagram(c) {
+  const W = 1000, L0 = 150, L1 = 985, span = L1 - L0, len = c.len;
+  const x = p => L0 + (p - 1) / len * span;
+  const ltrL = c.lltr[1] - c.lltr[0] + 1, rS = c.rltr[0] - c.start + 1, intOff = ltrL;
+  let s = "";
+  const rows = { dom: 26, elem: 84, nt: 128, aa: 156 };
+  s += `<text class="lab" x="0" y="${rows.dom + 4}">protein domains</text>`;
+  s += `<text class="lab" x="0" y="${rows.elem + 4}">founding element</text>`;
+  if (hasRef) { s += `<text class="lab" x="0" y="${rows.nt + 4}">reference, nt</text>`; s += `<text class="lab" x="0" y="${rows.aa + 4}">reference, protein</text>`; }
+  const step = len > 12000 ? 4000 : len > 6000 ? 2000 : 1000;
+  for (let p = 0; p <= len; p += step) {
+    s += `<line x1="${x(p + 1)}" x2="${x(p + 1)}" y1="${rows.elem + 20}" y2="${rows.elem + 24}" stroke="var(--muted)"/>`;
+    s += `<text class="lab" x="${x(p + 1)}" y="${rows.elem + 34}" text-anchor="middle" style="font-size:10px">${p / 1000} kb</text>`;
+  }
+  s += `<line x1="${x(1)}" x2="${x(len)}" y1="${rows.elem}" y2="${rows.elem}" stroke="var(--int)" stroke-width="3"/>`;
+  for (const [a, b] of c.n_runs) s += `<rect x="${x(a)}" y="${rows.elem - 9}" width="${Math.max(1, x(b) - x(a))}" height="18" fill="url(#hatch${c.start})" stroke="var(--gap)"/>`;
+  s += `<rect x="${x(1)}" y="${rows.elem - 9}" width="${x(ltrL) - x(1)}" height="18" fill="var(--ltr)" rx="2"/>`;
+  s += `<rect x="${x(rS)}" y="${rows.elem - 9}" width="${x(len) - x(rS)}" height="18" fill="var(--ltr)" rx="2"/>`;
+  if (c.tsd_len) for (const px of [x(1) - 4, x(len) + 4]) s += `<path d="M${px - 4},${rows.elem - 15} L${px + 4},${rows.elem - 15} L${px},${rows.elem - 9} Z" fill="var(--tsd)"/>`;
+  if (c.pbs) { const t = c.pbs, p = t.strand === "-" ? x(rS - 1 - Math.max(0, t.offset)) : x(ltrL + 1 + Math.max(0, t.offset)); s += `<line x1="${p}" x2="${p}" y1="${rows.elem - 14}" y2="${rows.elem + 14}" stroke="var(--fg)" stroke-width="1.5"/><text x="${p + 3}" y="${rows.elem - 14}" style="font-size:10px">PBS</text>`; }
+  { const p = x(rS + c.ppt_offset); s += `<line x1="${p}" x2="${p}" y1="${rows.elem - 14}" y2="${rows.elem + 14}" stroke="var(--fg)" stroke-width="1.5" stroke-dasharray="2 2"/><text x="${p - 3}" y="${rows.elem - 14}" text-anchor="end" style="font-size:10px">PPT</text>`; }
+  c.domains.forEach((d, i) => {
+    const a = x(d.start), b = x(d.end), y = rows.dom + (i % 2 ? 12 : -6), h = 12, cl = domClass(d.name);
+    const tip = d.strand === "+" ? `M${a},${y} L${Math.max(a, b - 5)},${y} L${b},${y + h / 2} L${Math.max(a, b - 5)},${y + h} L${a},${y + h} Z` : `M${Math.min(b, a + 5)},${y} L${b},${y} L${b},${y + h} L${Math.min(b, a + 5)},${y + h} L${a},${y + h / 2} Z`;
+    s += `<path d="${tip}" fill="var(--${cl})"><title>${esc(d.name)} (${esc(d.desc)}), ${d.strand} strand, E=${d.ievalue.toExponential(0)}</title></path>`;
+  });
+  let H = 112;
+  if (hasRef) {
+    const simCol = pid => { const t = Math.max(0, Math.min(1, (pid - 40) / 60)); return `color-mix(in srgb, var(--sim-hi) ${Math.round(t * 100)}%, var(--sim-lo))`; };
+    const bars = (hit, off, row) => (hit ? hit.hsps : []).map(h => `<rect x="${x(off + h.qs)}" y="${row - 6}" width="${Math.max(1.5, x(off + h.qe) - x(off + h.qs))}" height="12" fill="${simCol(h.pid)}"><title>${esc(fam(hit.target))}: ${h.pid.toFixed(1)}% over ${h.qe - h.qs + 1} bp</title></rect>`).join("");
+    s += `<line x1="${x(1)}" x2="${x(len)}" y1="${rows.nt}" y2="${rows.nt}" stroke="var(--rule)"/>`;
+    s += `<line x1="${x(1)}" x2="${x(len)}" y1="${rows.aa}" y2="${rows.aa}" stroke="var(--rule)"/>`;
+    s += bars(best(c.near_ltr), 0, rows.nt) + bars(best(c.near_int), intOff, rows.nt) + bars(best(c.near_int_aa), intOff, rows.aa);
+    const nl = best(c.near_ltr), ni = best(c.near_int), na = best(c.near_int_aa);
+    s += `<text class="lab" x="${x(1)}" y="${rows.nt + 20}" style="font-size:10px">LTR: ${nl ? esc(fam(nl.target)) : "no hit"}   internal: ${ni ? esc(fam(ni.target)) : "no hit"}</text>`;
+    s += `<text class="lab" x="${x(1)}" y="${rows.aa + 20}" style="font-size:10px">internal: ${na ? esc(fam(na.target)) : "no hit"}</text>`;
+    H = 186;
+  }
+  return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%;height:auto" role="img" aria-label="Structure of ${esc(c.id)}">
+    <defs><pattern id="hatch${c.start}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--surface)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--gap)" stroke-width="2"/></pattern></defs>${s}</svg></div>`;
+}
+
+function ends(c) {
+  const t = c.tsd_len, f5 = c.flank5, f3 = c.flank3, r3 = f3.slice(0, t);
+  const diff = (a, b) => a.split("").map((ch, i) => ch === b[i] ? esc(ch) : `<span class="m">${esc(ch)}</span>`).join("");
+  const tsdL = t && f5.endsWith(c.tsd_seq) ? `<span class="dim">${esc(f5.slice(0, -t))}</span><span class="t">${c.tsd_mm ? diff(c.tsd_seq, r3) : esc(c.tsd_seq)}</span>` : `<span class="dim">${esc(f5)}</span>`;
+  const tsdR = t && (c.tsd_mm || f3.startsWith(c.tsd_seq)) ? `<span class="t">${c.tsd_mm ? diff(r3, c.tsd_seq) : esc(r3)}</span><span class="dim">${esc(f3.slice(t))}</span>` : `<span class="dim">${esc(f3)}</span>`;
+  const m5 = `<span class="m">${esc(c.ltr5_head.slice(0, 2))}</span><span class="l">${esc(c.ltr5_head.slice(2))}</span>`;
+  const m3 = `<span class="l">${esc(c.ltr3_tail.slice(0, -2))}</span><span class="m">${esc(c.ltr3_tail.slice(-2))}</span>`;
+  let out = `5′ end  ${tsdL}${m5}…\n3′ end  …${m3}${tsdR}\n\n`;
+  if (c.pbs) {
+    const w = c.pbs.strand === "-" ? c.after3ltr_rc : c.after5ltr, a = Math.max(0, c.pbs.offset);
+    out += `PBS     <span class="dim">${esc(w.slice(0, a))}</span><span class="m">${esc(w.slice(a, a + 18))}</span><span class="dim">${esc(w.slice(a + 18))}</span>  <span class="dim">tRNA-${esc(c.pbs.trna)}, ${c.pbs.strand} strand</span>\n`;
+  } else out += `PBS     <span class="dim">no tRNA primer site found</span>\n`;
+  const b = c.before3ltr, st = b.length + c.ppt_offset;
+  if (st >= 0) out += `PPT     <span class="dim">${esc(b.slice(0, st))}</span><span class="m">${esc(b.slice(st, st + 15))}</span><span class="dim">${esc(b.slice(st + 15))}</span><span class="l">|3′ LTR</span>`;
+  return `<div class="seq">${out}</div>`;
+}
+
+function dossier(c, i) {
+  const [lvl, label, reasons] = c.verdict;
+  const nl = best(c.near_ltr), ni = best(c.near_int), na = best(c.near_int_aa), no = best(c.near_own);
+  const gapbp = c.n_runs.reduce((a, [s, e]) => a + e - s + 1, 0);
+  const row = (k, h, extra) => `<tr><td>${k}</td><td>${h ? esc(fam(h.target)) : "none"}</td><td>${h ? h.ident + "%" : "–"}</td><td>${h ? pct(h.qcov) : "–"}</td><td>${extra}</td></tr>`;
+  const runners = arr => (arr || []).slice(1, 3).map(h => `${esc(fam(h.target))} ${h.ident}%`).join(", ") || "–";
+  const m = c.mask, cl = c.cluster;
+  return `<article class="case" id="${esc(c.family)}">
+    <header><h2>${esc(c.family)}</h2><span class="chip ${lvl}">${esc(label)}</span><span style="color:var(--muted);font-size:0.88rem">${esc(c.class)}</span></header>
+    <ul class="reasons">${reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+    ${diagram(c)}
+    <div class="legend"><span><i style="background:var(--ltr)"></i>LTR</span><span><i style="background:repeating-linear-gradient(45deg,var(--gap) 0 2px,var(--surface) 2px 4px);border:1px solid var(--gap)"></i>assembly gap</span><span><i style="background:var(--tsd)"></i>TSD</span><span><i style="background:var(--gag)"></i>GAG</span><span><i style="background:var(--pr)"></i>protease</span><span><i style="background:var(--inte)"></i>integrase</span><span><i style="background:var(--rt)"></i>RT</span><span><i style="background:var(--rh)"></i>RNase H</span><span><i style="background:var(--other)"></i>other</span>${hasRef ? `<span><i style="background:linear-gradient(90deg,var(--sim-lo),var(--sim-hi))"></i>identity 40→100%</span>` : ""}</div>
+    <div class="grid2">
+      <section>
+        <h3>Founding element</h3>
+        <dl>
+          <dt>Location</dt><dd>${esc(c.seq)}:${c.start.toLocaleString()}–${c.end.toLocaleString()} (${c.len.toLocaleString()} bp)</dd>
+          <dt>LTRs</dt><dd>${(c.lltr[1] - c.lltr[0] + 1).toLocaleString()} / ${(c.rltr[1] - c.rltr[0] + 1).toLocaleString()} bp, ${c.ltr_identity.toFixed(2)}% identical</dd>
+          <dt>TSD</dt><dd>${c.tsd_len ? `${c.tsd_len} bp, ${esc(c.tsd_seq)}${c.tsd_mm ? ` / ${esc(c.flank3.slice(0, c.tsd_len))}, one mismatch` : ""}` : "none found"}</dd>
+          <dt>Ends</dt><dd>${esc(c.motif.slice(0, 2))}…${esc(c.motif.slice(2))} ${c.motif_class === "TGCA" ? "(canonical TG…CA)" : c.motif_class === "known" ? "(known variant)" : "(non-canonical)"}</dd>
+          <dt>PBS</dt><dd>${c.pbs ? `tRNA-${esc(c.pbs.trna)}, ${c.pbs.mm12 ? c.pbs.mm12 + " mismatch" : "exact"} over 12 nt, ${c.pbs.strand} strand` : "none found"}</dd>
+          <dt>PPT</dt><dd>${c.ppt_purines15}/15 purines, starting ${-c.ppt_offset} bp before the 3′ LTR</dd>
+          <dt>Domains</dt><dd>${c.domains.map(d => `${esc(d.name)}${d.strand === "-" ? "(−)" : ""}`).join(" · ") || "none"}</dd>
+          <dt>Gaps</dt><dd>${gapbp ? `${gapbp.toLocaleString()} bp of N` : "none"}</dd>
+        </dl>
+        ${ends(c)}
+        <details><summary>5′ vs 3′ LTR alignment</summary><pre>${esc(c.ltr_pair_aln)}</pre></details>
+      </section>
+      <section>
+        <h3>Family</h3>
+        <dl>
+          <dt>Models</dt><dd>${c.models.map(x => `${esc(x.name)} (${x.len.toLocaleString()} bp)`).join(", ")}</dd>
+          <dt>Elements</dt><dd>${cl.elements} full-length ${cl.elements === 1 ? "copy" : "copies"} on ${cl.seqs} ${cl.seqs === 1 ? "sequence" : "sequences"}${cl.elements > 1 ? `, at most ${pct(cl.top_seq_share)} on one` : ""}${cl.sd ? "; flagged as a segmental duplication" : ""}</dd>
+          ${m ? `<dt>Genome hits</dt><dd>${m.hits.toLocaleString()} on ${m.seqs.toLocaleString()} sequences, ${mb(m.bp)}; ${m.ltr_full.toLocaleString()} LTR and ${m.int_full.toLocaleString()} internal hits over half a model</dd>` : ""}
+          ${m && hasStd ? `<dt>Masking</dt><dd>TP ${mb(m.tp)} · FP ${mb(m.fp)} (${pct(m.fp / Math.max(1, m.tp + m.fp))})</dd>
+          <dt>FP called</dt><dd>${m.fpcls.map(([k, v]) => `${esc(k)} ${mb(v)}`).join(", ") || "–"}</dd>
+          ${T.other ? `<dt>${esc(T.other)} too</dt><dd>${pct(m.fp_other / Math.max(1, m.fp))} of the FP bases</dd>` : ""}` : ""}
+        </dl>
+        <h3 style="margin-top:6px">Distance from known families</h3>
+        <div class="scroll"><table class="simtab">
+          <thead><tr><th>Query</th><th>Closest</th><th>Identity</th><th>Coverage</th><th>Next</th></tr></thead>
+          <tbody>
+            ${hasRef ? row("LTR, nt", nl, runners(c.near_ltr)) + row("Internal, nt", ni, runners(c.near_int)) + row("Internal, protein", na, runners(c.near_int_aa)) : ""}
+            ${row("LTR vs this library", no, runners(c.near_own))}
+          </tbody></table></div>
+        <h3 style="margin-top:6px">Domain hits</h3>
+        <div class="scroll"><table>
+          <thead><tr><th>Domain</th><th>Strand</th><th>Position</th><th>E-value</th></tr></thead>
+          <tbody>${c.domains.map(d => `<tr><td title="${esc(d.desc)}">${esc(d.name)}</td><td>${d.strand}</td><td>${d.start.toLocaleString()}–${d.end.toLocaleString()}</td><td>${d.ievalue.toExponential(0)}</td></tr>`).join("") || `<tr><td colspan="4">none</td></tr>`}</tbody>
+        </table></div>
+      </section>
+    </div>
+  </article>`;
+}
+
+function render() {
+  renderFilters();
+  const vis = CASES.filter(c => show === "all" || c.verdict[0] === show);
+  const head = `<thead><tr><th>Family</th><th>Class</th><th>Element</th><th>LTR id</th><th>TSD</th><th>Domains</th><th>PBS</th><th>Copies</th>${hasRef ? "<th>Nearest reference</th>" : ""}${hasMask ? `<th>${hasStd ? "TP / FP" : "Masked"}</th>` : ""}<th>Verdict</th></tr></thead>`;
+  const body = vis.map(c => {
+    const nl = best(c.near_ltr), ni = best(c.near_int); const nr = [nl && ["LTR", nl], ni && ["INT", ni]].filter(Boolean).sort((a, b) => b[1].ident * b[1].qcov - a[1].ident * a[1].qcov)[0];
+    return `<tr><td><a href="#${esc(c.family)}">${esc(c.family)}</a></td><td>${esc(c.class.replace("LTR/", ""))}</td><td>${(c.len / 1000).toFixed(1)} kb</td><td>${c.ltr_identity.toFixed(1)}%</td>
+      <td>${c.tsd_len ? esc(c.tsd_seq) : "–"}</td><td>${c.domains.length}</td><td>${c.pbs ? esc(c.pbs.trna) : "–"}</td><td>${c.cluster.elements} / ${c.cluster.seqs} seq</td>
+      ${hasRef ? `<td>${nr ? `${esc(fam(nr[1].target))} ${nr[0]} ${nr[1].ident}% / ${pct(nr[1].qcov)}` : "none"}</td>` : ""}${hasMask ? `<td>${maskCell(c)}</td>` : ""}
+      <td><span class="chip ${c.verdict[0]}">${esc(c.verdict[1])}</span></td></tr>`;
+  }).join("");
+  document.getElementById("summary").innerHTML = head + `<tbody>${body}</tbody>`;
+  document.getElementById("cases").innerHTML = vis.map(dossier).join("");
+}
+render();
+</script>

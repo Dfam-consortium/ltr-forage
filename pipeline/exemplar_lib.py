@@ -10,7 +10,8 @@ for l in open(recfa):
     else: seqs[n].append(l.strip())
 seqs={k:''.join(v) for k,v in seqs.items()}
 elem_recs={}
-for r in csv.DictReader(open(os.environ.get('TSV','rice.m5.tsv')),delimiter='\t'):
+if 'TSV' not in os.environ: sys.exit('exemplar_lib.py: set TSV to the ltr-forage table (cand.tsv)')
+for r in csv.DictReader(open(os.environ['TSV']),delimiter='\t'):
     if r['keep']!='1': continue
     s=r['seq']; e=f"{s}:{r['elem_start']}..{r['elem_end']}"
     ls,le,rs,re_=int(r['lltr_start']),int(r['lltr_end']),int(r['rltr_start']),int(r['rltr_end'])

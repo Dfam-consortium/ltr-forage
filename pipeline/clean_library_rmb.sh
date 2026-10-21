@@ -1,5 +1,5 @@
 #!/bin/bash
-# Depth cleanup with the rmblast port (library_recipe.sh step 6; replaces clean_library.sh, which runs RepeatMasker).
+# Depth cleanup with the rmblast port (ltr_library.py step 6; eval/benchmarks/clean_library.sh is the RepeatMasker version).
 # Usage: clean_library_rmb.sh <lib.fa> <genome_sample.fa> <outdir> <rounds> <scale> <matrix> [excise options...]
 # Each round: rmblastn of the sample with RepeatMasker's -lib settings (NCBIBlastSearchEngine.pm:
 # word 9, gap 24/6, X-drops 450/112/225, minscore 225; matrix = 20p<GC>g for the genome's GC),
@@ -10,7 +10,7 @@ set -euo pipefail
 lib=$1; sample=$2; out=$3; rounds=$4; scale=$5; matrix=$6; shift 6
 HERE=$(cd "$(dirname "$0")" && pwd)
 # default: a rmblast-port checkout beside the LTRHarvest directory (ltr_library.py always sets RMBLASTN)
-RMB=${RMBLASTN:-$HERE/../../../../rmblast-port/rmblast/target/release/rmblastn}
+RMB=${RMBLASTN:-$HERE/../../../rmblast-port/rmblast/target/release/rmblastn}
 B=${BATCHES:-16}; T=${THREADS:-4}
 mkdir -p "$out/batches"; cp "$lib" "$out/round0.fa"
 # split the sample into B batches of whole sequences, balanced by length
