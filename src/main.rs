@@ -209,6 +209,12 @@ struct Args {
     #[arg(long, default_value_t = 0.99, value_name = "FRAC")]
     tandem_max: f64,
 
+    /// Reject a candidate kept on a domain hit alone (no TSD, no TG..CA and no
+    /// PBS) whose final LTR identity (after re-extension) is below this
+    /// percentage: duplicated segments with a stray integrase hit; 0 disables
+    #[arg(long, default_value_t = 70.0, value_name = "PCT")]
+    domain_only_min_identity: f64,
+
     /// Run the domain searches on candidates the LTR self-repeat check has
     /// already rejected too (their table domain columns are "." otherwise);
     /// the decisions do not change
@@ -756,58 +762,10 @@ where
         (vec![None; n], vec![Vec::new(); n])
     };
 
-    // ---- Phase 3g: decisions and the library ----
-    if args.internal_gap_max.is_some() && !args.internal_stats {
-        eprintln!("Warning: --internal-gap-max has no effect without --internal-stats");
-    }
-    if args.domain_hmm.is_none() && args.keep == decide::KeepLevel::Domain {
-        eprintln!("Warning: --keep domain keeps nothing without --domain-hmm");
-    }
-    let decisions: Vec<decide::Decision> = surviving
-        .iter()
-        .zip(final_coords.iter())
-        .zip(domain_calls.iter())
-        .zip(internal_stats.iter())
-        .zip(self_cov.iter())
-        .zip(ltr_domain_hits.iter())
-        .map(|((((((c, _), &(l1s, _, _, l2e)), dc), ist), &(sc_l, sc_r)), ldh)| {
-            let seq_off = seq_starts[c.seq_num];
-            let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
-            let tsd = features::tsd_or_mm1(text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
-            let motif = features::motif_at(text, l1s, l2e);
-            decide::decide(
-                args.keep,
-                args.internal_gap_max,
-                args.tandem_max,
-                &decide::Evidence { domain: dc.as_ref(), tsd_len: tsd.len, tsd_mm: tsd.mismatches, motif: &motif, gap_frac: ist.as_ref().map(|s| s.gap_frac), self_cov: sc_l.max(sc_r), ltr_domain_hits: ldh.iter().filter(|h| domain::is_core(h)).count() },
-            )
-        })
-        .collect();
-    let kept = decisions.iter().filter(|d| d.keep).count();
-    let vetoed = decisions.iter().filter(|d| d.why.starts_with("veto:notLTR") || d.why.starts_with("veto:mixture")).count();
-    let tandem = decisions.iter().filter(|d| d.why.starts_with("veto:tandem")).count();
-    let coding = decisions.iter().filter(|d| d.why.starts_with("veto:ltrdomain")).count();
-    eprintln!(
-        "Phase 3g: kept {} of {} candidate(s) at --keep {:?}, {} vetoed by protein hits, {} by LTR self-repeat, {} by a domain inside an LTR ({:.1}s elapsed)",
-        kept, decisions.len(), args.keep, vetoed, tandem, coding, t_start.elapsed().as_secs_f64(),
-    );
-    if let Some(path) = &args.library {
-        let mut out = std::io::BufWriter::new(std::fs::File::create(path).with_context(|| format!("creating {}", path))?);
-        for (((c, _), &ltrs), (d, dc)) in surviving.iter().zip(final_coords.iter()).zip(decisions.iter().zip(domain_calls.iter())) {
-            if !d.keep {
-                continue;
-            }
-            let name = seq_names.get(c.seq_num).map(|s| s.as_str()).unwrap_or("?");
-            let sf = dc.as_ref().map(|d| d.superfamily.as_str()).unwrap_or("unknown");
-            decide::write_element(&mut out, name, text, seq_starts[c.seq_num], ltrs, sf, &d.why)?;
-        }
-        std::io::Write::flush(&mut out)?;
-        eprintln!("Wrote {} element(s) to {}", kept, path);
-    }
-
     // ---- Phase 3h: genome tRNA scan and PBS annotation ----
-    let want_pbs = args.format == OutputFormat::Tsv && !args.no_pbs_trna;
-    let pbs_calls: Vec<(Option<pbs::PbsHit>, Option<usize>)> = if want_pbs || args.trna_out.is_some() {
+    // before the decisions: a PBS exempts a domain-only candidate from --domain-only-min-identity
+    let want_pbs = (args.format == OutputFormat::Tsv || args.domain_only_min_identity > 0.0) && !args.no_pbs_trna;
+    let (pbs_calls, trna_calls): (Vec<(Option<pbs::PbsHit>, Option<usize>)>, Option<(Vec<Vec<trna::TrnaCall>>, usize)>) = if want_pbs || args.trna_out.is_some() {
         let t0 = std::time::Instant::now();
         let ranges: Vec<(usize, usize)> = (0..seq_starts.len())
             .map(|i| (seq_starts[i], seq_starts.get(i + 1).map(|&s| s - 1).unwrap_or(text.len() - 1)))
@@ -841,13 +799,71 @@ where
             out.iter().filter(|(h, _)| h.as_ref().map_or(false, |h| h.mm12 == 0)).count(),
             t_start.elapsed().as_secs_f64(),
         );
-        if let Some(path) = &args.trna_out {
-            write_trna_library(path, &seq_names, &calls, &out, &decisions)?;
-        }
-        out
+        (out, Some((calls, n_calls)))
     } else {
-        vec![(None, None); surviving.len()]
+        (vec![(None, None); surviving.len()], None)
     };
+
+
+    // ---- Phase 3g: decisions and the library ----
+    if args.internal_gap_max.is_some() && !args.internal_stats {
+        eprintln!("Warning: --internal-gap-max has no effect without --internal-stats");
+    }
+    if args.domain_hmm.is_none() && args.keep == decide::KeepLevel::Domain {
+        eprintln!("Warning: --keep domain keeps nothing without --domain-hmm");
+    }
+    let identity: Vec<f64> = surviving
+        .iter()
+        .zip(reext.iter())
+        .map(|((c, _), re)| re.as_ref().map_or(c.similarity, |r| r.identity))
+        .collect();
+    let decisions: Vec<decide::Decision> = surviving
+        .iter()
+        .zip(final_coords.iter())
+        .zip(identity.iter().zip(pbs_calls.iter()))
+        .zip(domain_calls.iter())
+        .zip(internal_stats.iter())
+        .zip(self_cov.iter())
+        .zip(ltr_domain_hits.iter())
+        .map(|(((((((c, _), &(l1s, _, _, l2e)), (&idt, (ph, _))), dc), ist), &(sc_l, sc_r)), ldh)| {
+            let seq_off = seq_starts[c.seq_num];
+            let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+            let tsd = features::tsd_or_mm1(text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
+            let motif = features::motif_at(text, l1s, l2e);
+            decide::decide(
+                args.keep,
+                args.internal_gap_max,
+                args.tandem_max,
+                args.domain_only_min_identity,
+                &decide::Evidence { domain: dc.as_ref(), tsd_len: tsd.len, tsd_mm: tsd.mismatches, motif: &motif, gap_frac: ist.as_ref().map(|s| s.gap_frac), self_cov: sc_l.max(sc_r), ltr_domain_hits: ldh.iter().filter(|h| domain::is_core(h)).count(), identity: idt, pbs: ph.is_some() },
+            )
+        })
+        .collect();
+    let kept = decisions.iter().filter(|d| d.keep).count();
+    let vetoed = decisions.iter().filter(|d| d.why.starts_with("veto:notLTR") || d.why.starts_with("veto:mixture")).count();
+    let tandem = decisions.iter().filter(|d| d.why.starts_with("veto:tandem")).count();
+    let coding = decisions.iter().filter(|d| d.why.starts_with("veto:ltrdomain")).count();
+    let lowid = decisions.iter().filter(|d| d.why.starts_with("veto:lowid")).count();
+    eprintln!(
+        "Phase 3g: kept {} of {} candidate(s) at --keep {:?}, {} vetoed by protein hits, {} by LTR self-repeat, {} by a domain inside an LTR, {} domain-only below {:.0}% LTR identity ({:.1}s elapsed)",
+        kept, decisions.len(), args.keep, vetoed, tandem, coding, lowid, args.domain_only_min_identity, t_start.elapsed().as_secs_f64(),
+    );
+    if let (Some(path), Some((calls, _))) = (&args.trna_out, &trna_calls) {
+        write_trna_library(path, &seq_names, calls, &pbs_calls, &decisions)?;
+    }
+    if let Some(path) = &args.library {
+        let mut out = std::io::BufWriter::new(std::fs::File::create(path).with_context(|| format!("creating {}", path))?);
+        for (((c, _), &ltrs), (d, dc)) in surviving.iter().zip(final_coords.iter()).zip(decisions.iter().zip(domain_calls.iter())) {
+            if !d.keep {
+                continue;
+            }
+            let name = seq_names.get(c.seq_num).map(|s| s.as_str()).unwrap_or("?");
+            let sf = dc.as_ref().map(|d| d.superfamily.as_str()).unwrap_or("unknown");
+            decide::write_element(&mut out, name, text, seq_starts[c.seq_num], ltrs, sf, &d.why)?;
+        }
+        std::io::Write::flush(&mut out)?;
+        eprintln!("Wrote {} element(s) to {}", kept, path);
+    }
 
     eprintln!(
         "Phase 4: {} candidate(s) with TSD, {} with outer motif, {} with inner motif ({:.1}s elapsed)",

@@ -314,6 +314,17 @@ Alu-dimer pairs, 2 on unannotated contigs), 52 on rice and none on
 Arabidopsis, and no annotated element on any of the three. The alignment
 adds 40 s to an hg38 run.
 
+`--domain-only-min-identity` (default 70) rejects a candidate whose only
+evidence is a domain hit (no TSD, no TG..CA and no PBS) when its final LTR
+identity, measured after re-extension, is below that percentage. `--similar`
+is checked on the X-drop seed alignment, before re-extension grows the LTRs
+to their boundaries, so a pair of duplicated segments with a stray integrase
+hit can pass it at 89% and end at 70%. Such pairs gave the gorilla library
+1.2 kb "LTRs" in a 440 bp family. Among kept elements below 70% that rest on a
+domain hit alone, 41% of gorilla's lie in curated LTR annotation, against
+83-84% for rice and lotus and 98-100% for those with a PBS; the rule removes
+17 gorilla, 39 rice, 115 lotus, 2 zebra finch and 1 Arabidopsis element.
+
 A third veto uses the domain search on each LTR alone. An LTR does not
 encode the polyprotein, so a hit to a core polyprotein domain (integrase,
 gag, reverse transcriptase, the aspartyl proteases, chromo; the list is
@@ -615,8 +626,10 @@ Decision and library options:
                             region, right LTR per element)
       --tandem-max <FRAC>   Reject a candidate when either LTR aligns to itself off the diagonal
                             over at least this fraction of its length [default: 0.99]
+      --domain-only-min-identity <PCT>  Reject a candidate kept on a domain hit alone (no TSD,
+                            TG..CA or PBS) below this final LTR identity; 0 disables [default: 70]
 
-Primer binding site options (tsv output):
+Primer binding site options (tsv output, or for `--domain-only-min-identity`):
       --no-pbs-trna         Skip the genome tRNA scan behind the PBS columns
       --pbs-domain-strand   Search for the PBS only on the strand the protein domains give (default: both)
       --trna-out <FILE>     Write the genome's tRNA gene calls (the PBS probe source)
@@ -720,7 +733,7 @@ sequence named in the first column.
 | `dom_best_e`, `dom_hits` | Best E-value, and every hit as `accession:E-value:frame` (frames `aa1`..`aa3` forward, `rev_aa1`..`rev_aa3` on the reverse complement), comma separated; `.` when none |
 | `ltr_dom_hits` | With `--domain-hmm`: hits to the LTR-order (polyprotein) profiles when each LTR is searched on its own, summed over the two LTRs; 0 when `--keep-coding-ltrs` skips the search |
 | `lltr_self_cov`, `rltr_self_cov` | Fraction of each LTR covered by plus-strand alignments of the LTR against itself off the main diagonal; 1.00 for a satellite monomer or an Alu dimer, 0 for unique sequence |
-| `keep`, `evidence` | 1 when the candidate passes `--keep`, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `veto:ltrdomainN`, `gapF` when `--internal-gap-max` rejected it, or `none` |
+| `keep`, `evidence` | 1 when the candidate passes `--keep`, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `veto:ltrdomainN`, `veto:lowidP` (`--domain-only-min-identity`), `gapF` when `--internal-gap-max` rejected it, or `none` |
 | `pbs_trna`, `pbs_mm12` | The tRNA type(s) whose 3′-terminal 12 nt match the PBS, e.g. `Met(cat)` (several joined by `/` when they share the probe), and the mismatches (0 or 1); `.` when none |
 | `pbs_edist18` | Best edit distance (0 to 2) of a full 18-nt tRNA probe over the same window; `.` when none |
 | `pbs_strand` | `+` when the PBS was found after the left LTR, `-` when before the right LTR on the reverse strand; `.` when none |

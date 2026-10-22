@@ -13,7 +13,7 @@ insertions that depth cleanup exists to remove.  Records are oriented to the lon
 before 0.6.6 misplaced minus-strand rows), consensus columns supported by fewer than max(2, half the median)
 aligned copies are dropped, at the ends and inside (te-composer keeps a span carried by a single copy: on
 lotus a 3.3 kb insertion in 1 of 4 copies cost 7.2 Mb of false positives), and a cluster whose consensus
-cannot be built keeps its exemplar.  Models keep the exemplar's record names, so
+cannot be built keeps its exemplar.  LTR inputs longer than twice the cluster's median length are left out.  Models keep the exemplar's record names, so
 family.py and the reports trace them as before.  Validated on rice, 2026-10-19 (experiment 2, arm T): 273
 curated families recovered in full against 260 for exemplars, precision 98.26 vs 98.24.  With the column
 gate (arm G): rice 273, precision 98.27; lotus 250 vs 225 for exemplars, precision 92.50 vs 92.36 (ends-only
@@ -102,7 +102,16 @@ def main():
     core_recs = collections.defaultdict(dict)
     for r in core: core_recs[clus[elem_of(r)]][r[-3:]] = r
 
-    def inputs(c, kind): return [r for e in members[c] for r in recs[e][kind] if len(raw[r]) >= 50]
+    def inputs(c, kind):
+        names = [r for e in members[c] for r in recs[e][kind] if len(raw[r]) >= 50]
+        if kind == 'LTR' and len(names) >= 3:
+            # an LTR more than twice the cluster's median length is a lookalike (a duplicated segment called as an
+            # element joins a real family's cluster); te-composer can pick it as the reference, and its extra span
+            # then reaches the consensus: zebra finch 904 -> 4,433 bp (+10.8 Mb false positives), gorilla 439 ->
+            # 1,229 bp (+8.3 Mb)
+            med = sorted(len(raw[r]) for r in names)[len(names) // 2]
+            names = [r for r in names if len(raw[r]) <= 2 * med]
+        return names
 
     def consensus(c, kind):
         names = inputs(c, kind)
