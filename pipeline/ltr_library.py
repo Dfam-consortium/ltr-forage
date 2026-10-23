@@ -8,8 +8,11 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log):
    0  sample     depth sample: the whole genome up to --sample-above Mb, else a random
                  --sample-frac of its --window-kb windows (seeded); depth floors are scaled to it
  1-5  ltr-forage detect, re-extend, annotate (domains, TSD, PBS), decide, raw library; tandem arrays
-                 (satellites, simple repeats) are masked from the seed search (tandem.bed; --no-mask-tandem),
-                 and --mask-bed adds intervals of one's own (e.g. ULTRA calls)
+                 found by ltr-forage's FasTAN port (satellites, simple repeats, tandem copies; any unit up to
+                 30 kb) are masked from the seed search (tandem.bed; --no-fastan), and --mask-bed adds
+                 intervals of one's own.  No TSD boundary adjustment during extension (--mintsd 0): TSD and
+                 TG..CA are evidence at the final boundaries.  Calls whose re-extended ends agree within
+                 20 bp are merged, and overlapping calls are resolved by --overlaps
    5b precluster element clusters of the raw library (all-vs-all, as step 8)
    5c premodels  te-composer consensus for raw clusters of >= --min-cons elements; from here on
                  each big cluster is represented by its consensus, and steps 6-9 work on the elements of
@@ -221,7 +224,8 @@ class Run:
         self.sh([self.a.ltr_forage, self.sufr, '--reextend', '--reextend-ltr-max', 7000, '--format', 'tsv',
                  '--domain-hmm', self.a.domain_hmm, '--library', 'lib.raw.fa', '-j', self.a.threads,
                  '--nail', self.a.nail, '--mmseqs', self.a.mmseqs, '--domain-tmp', self.out,
-                 *([] if self.a.no_mask_tandem else ['--mask-tandem', '--mask-tandem-out', 'tandem.bed']),
+                 '--mintsd', 0, '--dedup-tol', 20, '--overlaps', self.a.overlaps,
+                 *([] if self.a.no_fastan else ['--fastan', '--fastan-out', 'tandem.bed']),
                  *(['--mask-bed', os.path.abspath(self.a.mask_bed)] if self.a.mask_bed else [])],
                 'ltr-forage.log', stdout='cand.tsv')
         with open(self.path('lib.raw.fa')) as fi, open(self.path('lib.fa'), 'w') as fo:
@@ -395,9 +399,13 @@ def main():
     ap.add_argument('--tier', choices=('pbs', 'strict'), default='pbs')
     ap.add_argument('--from', dest='from_step', choices=STEPS, help='rerun from this step on')
     d = ap.add_argument_group('detection')
-    d.add_argument('--no-mask-tandem', action='store_true',
-                   help='search tandem arrays for seeds too (by default runs of short-period sequence >= 1 kb are '
-                        'masked: a T2T assembly\'s satellites otherwise dominate the run; gorilla 4.5 h / 94 GB -> 81 min / 10 GB)')
+    d.add_argument('--no-fastan', action='store_true',
+                   help='search tandem arrays for seeds too (by default arrays found by the FasTAN port are masked: '
+                        'satellite pairs otherwise dominate the run and flood re-extension; gorilla candidate detection '
+                        '7.3 h -> 40 min at 8 threads, with more elements kept at higher curated support)')
+    d.add_argument('--overlaps', choices=('evidence', 'best'), default='evidence',
+                   help='overlapping calls: keep the one with the most evidence after annotation (evidence, default), '
+                        'or LTRharvest\'s best seed similarity per overlapping group before re-extension (best; faster)')
     d.add_argument('--mask-bed', metavar='BED', help='also mask these intervals (sequence name, 0-based start, end)')
     g = ap.add_argument_group('depth sample and floors')
     g.add_argument('--sample-above', type=float, default=200, help='sample genomes over this many non-N Mb (200)')

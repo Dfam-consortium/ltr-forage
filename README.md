@@ -98,6 +98,10 @@ The suffix-array index used by ltr-forage is provided by the
 [`sufr`](https://github.com/TravisWheelerLab/sufr) project, developed by Ken
 Youens-Clark, Jack Roddy, and Travis Wheeler at the University of Arizona.
 
+The tandem-array mask (`src/fastan.rs`) is a port of Gene Myers' FasTAN
+([github.com/thegenemyers/FASTAN](https://github.com/thegenemyers/FASTAN)),
+including the wave aligner it takes from daligner (Myers 2014).
+
 ---
 
 ## The LTRharvest Algorithm
@@ -131,6 +135,48 @@ constraints:
 - Repeat length ≤ `--ltr-max`
 - Both occurrences within the same input sequence
 
+#### Tandem-array mask (`--fastan`, not in LTRharvest)
+
+A tandem array of unit *p* yields a seed pair between almost every two of
+its units within `--dist-max`, so satellite and centromeric arrays flood the
+search: on a telomere-to-telomere gorilla assembly they gave 953 M seed
+pairs against hg38's 11 M. Worse, a pair of units that passes extension is
+re-extended across the array to the window limit and only then rejected by
+the LTR self-alignment check, which is where most of the run time went.
+`--fastan` finds tandem arrays with a port of Gene Myers' FasTAN
+(`src/fastan.rs`) and hides them from the seed search; the sequence itself
+is unchanged, so extension, TSDs and output still see it.
+
+FasTAN scans each contig (a maximal A/C/G/T run) in 32 kb blocks 24 kb
+apart. In a block, consecutive occurrences of the same 8-mer give seeds at
+offsets *d* < 30,000; offsets holding more than max(1, *d*/64) seeds are
+tried, most seeds first, by a local alignment of the sequence against
+itself along diagonal *d*. The aligner is daligner's wave aligner: unit-cost
+edit distance, furthest-reaching points per diagonal (so its cost grows with
+the differences, not the area), confined to *d* ± 0.2 *d*, and extended while
+the last 60 columns stay near 70% identity. An alignment spanning at least
+1.95 *d* is an array of period about *d* (the mean diagonal over its trace
+points); its bases are set to N so the next offsets and blocks skip it. An
+LTR element's two LTRs align over far less than twice their spacing, so a
+single element is never masked; the cost falls on genuine tandem copies of
+an element and on satellites grown from an LTR, which keep their first
+copies.
+
+The port reproduces FasTAN v0.8's first pass exactly: the same 115,154 arrays
+on rice (MSU7) and 613,069 on gorilla (mGorGor1 v2.1), base for base, with
+the period and identity `tanbed` reports. It takes 47 s on rice and 386 s on
+gorilla with 8 threads (FasTAN: 32 s and 542 s). `--fastan-out` writes the
+arrays as BED (name, start, end, period, 1000 × (1 − differences / length)),
+and `--fastan-only` writes them and exits. Arrays cover 21.6 Mb of rice
+(5.8%) and 713.7 Mb of gorilla (20.1%).
+
+With the mask, gorilla's candidate detection (TSD adjustment off, see below,
+and no overlap removal before re-extension) dropped from 320,350 candidates
+and 7.3 h to 24,283 candidates and 40 min at 8 threads, and the kept set
+grew from 1,805 to 2,137 elements while their curated LTR support rose from
+96% to 98%. `--mask-bed` adds intervals of one's own (name, 0-based start,
+end) to the mask.
+
 ### Phase 2 — X-Drop Gapped Extension
 
 Each seed represents a short exact match that is the core of a putative LTR
@@ -154,6 +200,14 @@ that search can move the outer boundaries.  GenomeTools uses the same order.
 Multiple seeds can yield candidates with identical post-TSD outer LTR
 boundaries.  These duplicates are removed by sorting on (sequence, left_ltr_start,
 right_ltr_end) and collapsing identical records.
+
+Without the TSD adjustment, seeds of one element stop their X-drop runs a few
+to hundreds of bases apart, so exact duplicates are rare; they re-extend to
+the same ends, though. `--dedup-tol N` (not in LTRharvest; 0 by default)
+merges, after re-extension, candidates whose final outer ends both lie
+within N bases of a candidate with higher final LTR identity. On rice with
+no overlap removal, 13,394 of 22,873 candidates have another within 20 bp
+after re-extension and none before it.
 
 #### Target Site Duplication (TSD) Search
 
@@ -187,6 +241,20 @@ the adjusted LTRs with Ukkonen's greedy edit-distance algorithm (O(*n*·*d*)
 time, O(*d*) space), and discards candidates below `--similar` percent
 identity.
 
+In practice this is a boundary adjustment more than a filter. A 4 bp exact
+match between the two 120 bp windows is almost always found by chance: of
+1,235,994 gorilla seed pairs 7 lack one, of 93,050 on rice 5. What rejects
+is the similarity recheck on the moved boundaries: 163,540 gorilla and
+5,584 rice candidates pass at their X-drop ends but fail once their ends
+are moved to the nearest 4 bp match. On rice those are mostly real
+elements (dropping the adjustment gains elements, 97% of them on curated
+LTR annotation); on gorilla it halved the candidates, yet removed the
+expensive satellite pairs no more often than any others (52% of the
+candidates, 28% of the downstream time). `pipeline/ltr_library.py`
+therefore runs with `--mintsd 0`, masks the arrays explicitly
+(`--fastan`) and treats TSD and TG..CA as evidence at the final,
+re-extended boundaries (Phase 6).
+
 If `--motif` is specified, only TSD candidates where the adjusted LTR junctions
 match the TG...CA palindromic motif (configurable via `--motifmis`) are kept.
 The inner LTR borders are also checked for the complementary CA/TG motif.
@@ -199,6 +267,15 @@ Overlapping predictions on the same sequence are resolved according to
   keep the one with the highest similarity
 - `no` — discard all elements in any overlapping cluster
 - `all` — report all elements regardless of overlap
+- `evidence` (not in LTRharvest) — keep all through re-extension, annotation
+  and the decision, then among overlapping kept candidates keep the one with
+  the most evidence (an LTR-order domain hit, a TSD, TG..CA, a PBS; then final
+  LTR identity). A candidate rejected on its own evidence never displaces a
+  kept one. `best` judges an overlapping group by the similarity of the
+  X-drop seed alignment before anything else is known; on ath and rice,
+  `evidence` keeps 10% and 5% more elements than `best` at the same curated
+  support, at 1.8–11× the candidate-detection time (most of it spent
+  re-extending and rejecting pairs next to masked arrays)
 
 ### Phase 4 — Re-extension (optional, `--reextend`)
 
@@ -476,6 +553,9 @@ start ≤ end).
 | Seed enumeration | Bottom-up ESA traversal (C), single-threaded | Same algorithm, streaming the sufr SA/LCP from disk, parallel over LCP-delimited pieces (`-j`) |
 | Seed extension | Single-threaded | Parallelised with Rayon (`-j`) |
 | TSD selection | Minimum total deviation | Minimum deviation (default); tiered biological ranking (`--tiered-tsd`) |
+| Tandem arrays | Seeded like any repeat | Masked from the seed search with a FasTAN port (`--fastan`) |
+| Near duplicates | Exact outer boundaries only | Also final ends within `--dedup-tol` bp after re-extension |
+| Overlaps | Best seed similarity per group, before anything else | Also `--overlaps evidence`: most evidence among kept candidates, after annotation |
 | Output | Space-separated, GT-compatible | GT-compatible by default (`--format gt`) |
 
 The seed enumeration (`maxpairs.rs`) and X-drop extension (`xdrop.rs`) are
@@ -597,6 +677,12 @@ TSD and motif options:
       --motifmis <N>        Allowed mismatches in the motif [default: 0]
       --tiered-tsd          Use tiered TSD selection instead of GT-compatible deviation-only
 
+Masking options:
+      --fastan              Mask tandem arrays found by the FasTAN port from the seed search
+      --fastan-out <FILE>   Write the arrays as BED (name, start, end, period, 1000 x identity)
+      --fastan-only         Only find the arrays (writes --fastan-out) and exit
+      --mask-bed <FILE>     Also mask these intervals (BED: name, 0-based start, end)
+
 Re-extension options:
       --reextend            Re-extend each LTR pair with a local alignment after overlap removal
       --reextend-ltr-max <BP>   Longest LTR the alignment windows allow for [default: 2000]
@@ -637,7 +723,9 @@ Primer binding site options (tsv output, or for `--domain-only-min-identity`):
       --trna-scan <FASTA>   Only scan FASTA for tRNA genes, print the calls and exit
 
 Output and performance options:
-      --overlaps <STRATEGY> Overlap removal strategy: all | best | no [default: best]
+      --overlaps <STRATEGY> Overlap removal strategy: all | best | no | evidence [default: best]
+      --dedup-tol <BP>      After re-extension, merge candidates whose final outer ends both lie
+                            within BP of a better one's; 0 disables [default: 0]
       --format <FORMAT>     Output format [default: gt] [possible values: gt, tsv]
   -j, --threads <N>         Threads for parallel extension (0 = all CPUs) [default: 0]
   -h, --help                Print help
@@ -784,9 +872,12 @@ program's path and version to `out/versions.txt`, and its step times to
 1. **Index and depth sample.**  A sufr index, and a genome sample for copy
    depth: the whole genome up to 200 Mb, else 10% of it in 100 kb windows.
    Depth thresholds scale with genome size and the sample fraction.
-2. **ltr-forage** with re-extension, tiered TSDs, protein domains and
-   the decision step, giving the candidate table (`cand.tsv`) and a raw
-   library of each kept element's LTR and internal region.
+2. **ltr-forage** with the FasTAN tandem-array mask (`tandem.bed`), no TSD
+   boundary adjustment (`--mintsd 0`), re-extension, the 20 bp near-duplicate
+   merge, protein domains, the decision step and overlap resolution by
+   evidence (`--overlaps best` for LTRharvest's rule), giving the candidate
+   table (`cand.tsv`) and a raw library of each kept element's LTR and
+   internal region.
 3. **Raw clustering and consensus representatives.**  The raw library is
    clustered all-vs-all with rmblastn.  Each cluster of at least
    `--min-cons` (3) elements is represented from here on by a te-composer
@@ -1020,6 +1111,12 @@ search.
    genes in nucleotide sequences. *Nucleic Acids Res.* 2004;**32**(1):11–16.
    DOI:[10.1093/nar/gkh152](https://doi.org/10.1093/nar/gkh152)
 
+6. Myers G. FasTAN: a fast tandem repeat finder.
+   [github.com/thegenemyers/FASTAN](https://github.com/thegenemyers/FASTAN)
+
+7. Myers G. Efficient local alignment discovery amongst noisy long reads.
+   In: *Algorithms in Bioinformatics (WABI 2014)*, LNCS 8701:52–67. Springer; 2014.
+
 ---
 
 ## License
@@ -1033,6 +1130,10 @@ version.  See [LICENSE](LICENSE).
 (Copyright (C) 2003-present Dean Laslett; Laslett and Canback 2004, Nucleic
 Acids Res. 32:11-16), which is distributed under GPL v3 or later; ltr-forage is
 licensed under GPL v3 or later to match.
+
+`src/fastan.rs` is a port of FasTAN and of daligner's local aligner
+(Copyright (c) 2020, Dr. Eugene W. Myers), distributed under a BSD-style
+license whose notice the file reproduces.
 
 The LTRharvest algorithm is implemented based on the published description and
 the open-source GenomeTools reference implementation (ISC license).  The `sufr`

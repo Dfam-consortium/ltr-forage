@@ -16,7 +16,7 @@ mod maxpairs;
 mod pbs;
 mod reextend;
 mod stream;
-mod tandem;
+mod fastan;
 mod trna;
 mod tsd;
 mod xdrop;
@@ -108,7 +108,18 @@ struct Args {
     #[arg(long, default_value_t = 0, value_name = "N")]
     motifmis: u32,
 
-    /// Overlap removal strategy: all (keep all), best (keep best per cluster), no (remove all overlapping)
+    /// After re-extension: treat candidates whose final outer ends both lie
+    /// within this many bases of a better candidate's as duplicates (higher
+    /// final LTR identity wins); seeds of one element stop their X-drop runs
+    /// hundreds of bases apart but re-extend to the same ends; 0 disables
+    #[arg(long, default_value_t = 0, value_name = "BP")]
+    dedup_tol: usize,
+
+    /// Overlap removal strategy: all (keep all), best (keep best per cluster by
+    /// seed similarity, LTRharvest's), no (remove all overlapping), evidence
+    /// (keep all through annotation, then among overlapping kept candidates
+    /// keep the one with the most evidence: domain, TSD, TG..CA and PBS, then
+    /// LTR identity)
     #[arg(long, default_value = "best", value_name = "STRATEGY")]
     overlaps: String,
 
@@ -247,35 +258,46 @@ struct Args {
     #[arg(long, value_name = "FASTA")]
     trna_scan: Option<String>,
 
-    /// Mask tandem arrays (satellites, simple repeats) from the seed search:
-    /// runs of at least --mask-tandem-len bases where most positions repeat
-    /// within --mask-tandem-period.  The sequence itself is unchanged.  For
-    /// assemblies with centromeric and satellite arrays (T2T), where those
-    /// arrays dominate the run time
-    #[arg(long)]
-    mask_tandem: bool,
-
-    /// Longest tandem unit masked (default: 1000, kept below --mindistltr so
-    /// no LTR pair can be masked)
-    #[arg(long, value_name = "BP")]
-    mask_tandem_period: Option<usize>,
-
-    /// Shortest masked run
-    #[arg(long, default_value_t = 1000, value_name = "BP")]
-    mask_tandem_len: usize,
-
-    /// Share of periodic positions a masked run needs
-    #[arg(long, default_value_t = 0.5, value_name = "FRAC")]
-    mask_tandem_frac: f64,
-
-    /// Write the masked tandem runs to FILE (BED, 0-based half-open)
-    #[arg(long, value_name = "FILE")]
-    mask_tandem_out: Option<String>,
-
     /// Also mask the intervals in FILE (BED: name, 0-based start, end) from
     /// the seed search, e.g. tandem repeats from ULTRA or TRF
     #[arg(long, value_name = "FILE")]
     mask_bed: Option<String>,
+
+    /// Mask tandem arrays (satellites, simple repeats, tandem copies) from
+    /// the seed search: arrays found by a port of Gene Myers' FasTAN
+    /// (src/fastan.rs), any unit up to 30 kb with about two copies or more at
+    /// roughly 70% identity or better.  The sequence itself is unchanged.  An
+    /// array of unit p yields a seed pair between almost every two units, so
+    /// without it centromeric and satellite arrays dominate the run time
+    #[arg(long)]
+    fastan: bool,
+
+    /// Write the FasTAN-port arrays to FILE (BED: name, start, end, period,
+    /// 1000 x (1 - differences / length), as FasTAN's tanbed writes them)
+    #[arg(long, value_name = "FILE")]
+    fastan_out: Option<String>,
+
+    /// Only run the FasTAN port (writes --fastan-out) and exit
+    #[arg(long)]
+    fastan_only: bool,
+}
+
+/// BED intervals as half-open text coordinates, clipped to their sequence;
+/// returns the intervals, their total length and the lines naming unknown sequences
+fn read_bed(path: &str, seq_names: &[String], seq_starts: &[usize], text_len: usize) -> Result<(Vec<(usize, usize)>, usize, usize)> {
+    let idx: std::collections::HashMap<&str, usize> = seq_names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let (mut out, mut bp, mut unknown) = (Vec::new(), 0usize, 0usize);
+    for line in std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(path)?)) {
+        let line = line?;
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 3 || line.starts_with('#') || line.starts_with("track") { continue; }
+        let (Ok(a), Ok(b)) = (f[1].parse::<usize>(), f[2].parse::<usize>()) else { continue };
+        let Some(&k) = idx.get(f[0]) else { unknown += 1; continue };
+        let end = if k + 1 < seq_starts.len() { seq_starts[k + 1] } else { text_len };
+        let (a, b) = (seq_starts[k] + a, (seq_starts[k] + b).min(end));
+        if a < b { out.push((a, b)); bp += b - a; }
+    }
+    Ok((out, bp, unknown))
 }
 
 // --------------------------------------------------
@@ -407,43 +429,33 @@ where
     // traversal would emit them, so later tie-breaks are unaffected.
     let mut extra: Vec<(usize, usize)> = Vec::new();
     if let Some(path) = &args.mask_bed {
-        let idx: std::collections::HashMap<&str, usize> = seq_names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
-        let (mut n, mut bp, mut unknown) = (0usize, 0usize, 0usize);
-        for line in std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(path)?)) {
-            let line = line?;
-            let f: Vec<&str> = line.split('\t').collect();
-            if f.len() < 3 || line.starts_with('#') || line.starts_with("track") { continue; }
-            let (Ok(a), Ok(b)) = (f[1].parse::<usize>(), f[2].parse::<usize>()) else { continue };
-            let Some(&k) = idx.get(f[0]) else { unknown += 1; continue };
-            let end = if k + 1 < seq_starts.len() { seq_starts[k + 1] } else { text.len() };
-            let (a, b) = (seq_starts[k] + a, (seq_starts[k] + b).min(end));
-            if a < b { extra.push((a, b)); n += 1; bp += b - a; }
-        }
+        let (iv, bp, unknown) = read_bed(path, &seq_names, &seq_starts, text.len())?;
+        let n = iv.len();
+        extra.extend(iv);
         eprintln!("Mask BED: {} interval(s), {:.1} Mb{}", n, bp as f64 / 1e6,
                   if unknown > 0 { format!(" ({} on sequences not in the index, ignored)", unknown) } else { String::new() });
     }
-    let wild = if args.mask_tandem {
+    if args.fastan || args.fastan_only {
         let t0 = std::time::Instant::now();
-        let period = args.mask_tandem_period.unwrap_or(1000).min(args.dist_min.saturating_sub(1));
-        let runs = tandem::tandem_runs(text, tandem::TandemParams {
-            max_period: period, min_len: args.mask_tandem_len, min_frac: args.mask_tandem_frac,
-        });
-        let bp: usize = runs.iter().map(|(a, b)| b - a).sum();
-        eprintln!("Tandem mask: {} run(s), {:.1} Mb ({:.2}% of the text; unit <= {} bp; {:.1}s)",
-                  runs.len(), bp as f64 / 1e6, 100.0 * bp as f64 / text.len() as f64, period, t0.elapsed().as_secs_f64());
-        if let Some(path) = &args.mask_tandem_out {
+        let arrays = fastan::tandem_arrays(text, &seq_starts);
+        let bp: usize = arrays.iter().map(|a| a.aend - a.bbeg).sum();
+        eprintln!("FasTAN: {} array(s), {:.1} Mb before merging ({:.1}s)", arrays.len(), bp as f64 / 1e6, t0.elapsed().as_secs_f64());
+        if let Some(path) = &args.fastan_out {
             use std::io::Write;
             let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
-            for &(a, b) in &runs {
-                let k = seq_starts.partition_point(|&st| st <= a) - 1;   // runs never cross a separator
-                writeln!(w, "{}\t{}\t{}", seq_names[k], a - seq_starts[k], b - seq_starts[k])?;
+            for a in &arrays {
+                // as tanbed reports it
+                let id = (1000.0 * (1.0 - a.diffs as f64 / (a.aend - a.bbeg).max(1) as f64)).max(0.0) as i64;
+                writeln!(w, "{}\t{}\t{}\t{}\t{}", seq_names[a.seq], a.bbeg, a.aend, a.period, id)?;
             }
+            w.flush()?;
         }
-        extra.extend(runs);
-        maxpairs::WildRuns::with_extra(text, &extra)
-    } else {
-        maxpairs::WildRuns::with_extra(text, &extra)
-    };
+        if args.fastan_only {
+            std::process::exit(0);
+        }
+        extra.extend(arrays.iter().map(|a| (seq_starts[a.seq] + a.bbeg, seq_starts[a.seq] + a.aend)));
+    }
+    let wild = maxpairs::WildRuns::with_extra(text, &extra);
     let n_pieces = rayon::current_num_threads() * 4;
     let pieces = stream::split_points(sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
     let per_piece: Vec<Result<Vec<ltr::Seed>>> = pieces
@@ -588,7 +600,7 @@ where
         }
         _ => {
             let idx: Vec<usize> = (0..paired.len()).collect();
-            eprintln!("Phase 3c: {} candidate(s) (overlaps=all, no removal)", idx.len());
+            eprintln!("Phase 3c: {} candidate(s) (overlaps={}, no removal)", idx.len(), args.overlaps);
             idx
         }
     };
@@ -641,6 +653,40 @@ where
         out
     } else {
         vec![None; surviving.len()]
+    };
+
+    // ---- Phase 3d': near duplicates after re-extension (optional) ----
+    let (surviving, reext) = if args.dedup_tol > 0 {
+        let tol = args.dedup_tol;
+        let ends: Vec<(usize, usize, usize, f64)> = surviving
+            .iter()
+            .zip(reext.iter())
+            .map(|((c, ti), re)| match re {
+                Some(r) => (c.seq_num, r.left_ltr_start, r.right_ltr_end, r.identity),
+                None => (c.seq_num, ti.left_ltr_start, ti.right_ltr_end, c.similarity),
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..ends.len()).collect();
+        order.sort_by(|&a, &b| ends[b].3.partial_cmp(&ends[a].3).unwrap().then(a.cmp(&b)));
+        let mut claimed: std::collections::HashMap<usize, std::collections::BTreeMap<usize, Vec<usize>>> = Default::default();
+        let mut keep = vec![false; ends.len()];
+        for i in order {
+            let (sq, ls, re_, _) = ends[i];
+            let by_start = claimed.entry(sq).or_default();
+            let near = by_start
+                .range(ls.saturating_sub(tol)..=ls + tol)
+                .any(|(_, v)| v.iter().any(|&e| e.abs_diff(re_) <= tol));
+            if !near {
+                by_start.entry(ls).or_default().push(re_);
+                keep[i] = true;
+            }
+        }
+        let before = surviving.len();
+        let (s, r): (Vec<_>, Vec<_>) = surviving.into_iter().zip(reext).zip(keep).filter(|(_, k)| *k).map(|(p, _)| p).unzip();
+        eprintln!("Phase 3d: {} of {} candidate(s) left after merging final ends within {} bp", s.len(), before, tol);
+        (s, r)
+    } else {
+        (surviving, reext)
     };
 
     // ---- Phase 3e: internal-region statistics (optional) ----
@@ -817,7 +863,7 @@ where
         .zip(reext.iter())
         .map(|((c, _), re)| re.as_ref().map_or(c.similarity, |r| r.identity))
         .collect();
-    let decisions: Vec<decide::Decision> = surviving
+    let mut decisions: Vec<decide::Decision> = surviving
         .iter()
         .zip(final_coords.iter())
         .zip(identity.iter().zip(pbs_calls.iter()))
@@ -839,6 +885,32 @@ where
             )
         })
         .collect();
+    if args.overlaps == "evidence" {
+        // among overlapping kept candidates, the one with the most evidence; a candidate rejected on its own
+        // evidence never blocks one that was kept
+        let score = |i: usize| {
+            let w = &decisions[i].why;
+            (w.contains("domain") as u8) + (w.contains("tsd") as u8) + (w.contains("tgca") as u8) + (pbs_calls[i].0.is_some() as u8)
+        };
+        let mut order: Vec<usize> = (0..decisions.len()).filter(|&i| decisions[i].keep).collect();
+        order.sort_by(|&a, &b| score(b).cmp(&score(a)).then(identity[b].partial_cmp(&identity[a]).unwrap()).then(a.cmp(&b)));
+        let mut taken: std::collections::HashMap<usize, std::collections::BTreeMap<usize, usize>> = Default::default();
+        let longest = final_coords.iter().map(|&(a, _, _, d)| d - a).max().unwrap_or(0);
+        let mut dropped = 0;
+        for i in order {
+            let (sq, (s0, _, _, e0)) = (surviving[i].0.seq_num, final_coords[i]);
+            let spans = taken.entry(sq).or_default();
+            let hit = spans.range(s0.saturating_sub(longest)..=e0).any(|(&s, &e)| s <= e0 && s0 <= e);
+            if hit {
+                decisions[i].keep = false;
+                decisions[i].why.push_str(",overlap");
+                dropped += 1;
+            } else {
+                spans.insert(s0, e0);
+            }
+        }
+        eprintln!("Phase 3g: {} kept candidate(s) dropped as overlapping one with more evidence", dropped);
+    }
     let kept = decisions.iter().filter(|d| d.keep).count();
     let vetoed = decisions.iter().filter(|d| d.why.starts_with("veto:notLTR") || d.why.starts_with("veto:mixture")).count();
     let tandem = decisions.iter().filter(|d| d.why.starts_with("veto:tandem")).count();
