@@ -114,6 +114,22 @@ pub fn motif_at(text: &[u8], left_ltr_start: usize, right_ltr_end: usize) -> Str
     s
 }
 
+/// Both LTRs end in a poly-A tail (at least 12 A in their last 15 bp), or
+/// both start with poly-T (the same on the other strand).  LTRs end in CA;
+/// a pair of poly-A tails is two copies of a non-LTR retroposon's 3' end.
+pub fn polya_ltrs(text: &[u8], ltrs: (usize, usize, usize, usize)) -> bool {
+    let (l1s, l1e, l2s, l2e) = ltrs;
+    let count = |a: usize, b: usize, base: u8| -> usize {
+        (a..=b).filter(|&i| text.get(i).map_or(false, |c| c.to_ascii_uppercase() == base)).count()
+    };
+    if l1e < l1s + 14 || l2e < l2s + 14 {
+        return false;
+    }
+    let tail = count(l1e - 14, l1e, b'A') >= 12 && count(l2e - 14, l2e, b'A') >= 12;
+    let head = count(l1s, l1s + 14, b'T') >= 12 && count(l2s, l2s + 14, b'T') >= 12;
+    tail || head
+}
+
 /// LTR_retriever's reading of the terminal motif: `TGCA` for the canonical
 /// termini, `known` for the other dinucleotide pairs its rules accept
 /// (TGCT, TACA, TACT, TGGA, TGGT, TATA, TGTA, TGCC), `other` for the rest.

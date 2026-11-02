@@ -110,6 +110,9 @@ pub fn six_frames(seq: &[u8]) -> [Vec<u8>; 6] {
 const SEED_P: f64 = 0.01;
 
 /// Where nail and MMseqs2 are, and where nail works.
+/// Oldest nail the search runs with.
+pub const NAIL_MIN: (u32, u32, u32) = (0, 7, 1);
+
 pub struct Nail {
     pub nail: PathBuf,
     pub mmseqs: PathBuf,

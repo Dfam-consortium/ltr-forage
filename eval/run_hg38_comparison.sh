@@ -20,7 +20,7 @@ TIME="/usr/bin/time -v"
 PARAMS_GT="-seed 30 -minlenltr 100 -maxlenltr 1000 -mindistltr 1000 -maxdistltr 15000 \
   -similar 85 -xdrop 5 -mat 2 -mis -2 -ins -3 -del -3 -mintsd 4 -maxtsd 20 -vic 60 -overlaps best"
 PARAMS_PORT="--min-seed 30 --ltr-min 100 --ltr-max 1000 --dist-min 1000 --dist-max 15000 \
-  --similar 85 --xdrop 5 --mat 2 --mis -2 --ins -3 --del -3 --mintsd 4 --maxtsd 20 --vicinity 60 --overlaps best"
+  --similar 85 --xdrop 5 --mat 2 --mis -2 --ins -3 --del -3 --mintsd 4 --maxtsd 20 --vicinity 60 --overlaps best --ltrharvest"
 
 base=$(basename "$GENOME" .fa)
 

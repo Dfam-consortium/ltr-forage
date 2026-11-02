@@ -48,10 +48,9 @@ pub struct Evidence<'a> {
     /// sequence (two adjacent copies of one family called as one element,
     /// or a boundary that landed in the coding region).
     pub ltr_domain_hits: usize,
-    /// Final LTR identity (percent, after re-extension when it ran).
-    pub identity: f64,
-    /// A tRNA primer binding site was found after the 5' LTR.
-    pub pbs: bool,
+    /// Both LTRs end in a poly-A tail (or both start with poly-T, the
+    /// other strand); see `features::polya_ltrs`.
+    pub polya: bool,
 }
 
 pub struct Decision {
@@ -60,7 +59,7 @@ pub struct Decision {
     pub why: String,
 }
 
-pub fn decide(level: KeepLevel, gap_max: Option<f64>, tandem_max: f64, min_identity_domain_only: f64, ev: &Evidence) -> Decision {
+pub fn decide(level: KeepLevel, gap_max: Option<f64>, tandem_max: f64, ev: &Evidence) -> Decision {
     let mut why = String::new();
     let order = ev.domain.map(|d| d.order.as_str()).unwrap_or(".");
     if order == "notLTR" || order == "mixture" {
@@ -77,6 +76,13 @@ pub fn decide(level: KeepLevel, gap_max: Option<f64>, tandem_max: f64, min_ident
     }
     let dom = order == "LTR";
     let tgca = ev.motif == "TGCA";
+    // two LTRs that end in a poly-A tail without the TG..CA termini are the 3' ends of two copies of a
+    // non-LTR retroposon flanking some other sequence (mm10: 22 kept pairs of B1/B2 SINE or L1 3' ends,
+    // 115-185 and 700-1,150 bp; an L1 3' end called as an LTR masked 90 Mb of LINE sequence)
+    if ev.polya && !tgca {
+        why.push_str("veto:polyA");
+        return Decision { keep: false, why };
+    }
     if dom {
         write!(why, "domain").unwrap();
     }
@@ -96,13 +102,6 @@ pub fn decide(level: KeepLevel, gap_max: Option<f64>, tandem_max: f64, min_ident
         if why.is_empty() {
             why.push_str("none");
         }
-        return Decision { keep: false, why };
-    }
-    // a domain hit is the only evidence: below this identity such pairs are mostly duplicated segments
-    // carrying a stray integrase hit (gorilla: 41% in curated LTR annotation, against 83-100% for the
-    // plants and for those with a PBS)
-    if dom && ev.tsd_len == 0 && !tgca && !ev.pbs && ev.identity < min_identity_domain_only {
-        let why = format!("veto:lowid{:.1}", ev.identity);
         return Decision { keep: false, why };
     }
     if let (Some(max), Some(gap)) = (gap_max, ev.gap_frac) {
@@ -156,39 +155,48 @@ mod tests {
         let ltr = call("LTR");
         let not = call("notLTR");
         fn ev<'a>(d: Option<&'a DomainCall>, tsd: usize, motif: &'a str) -> Evidence<'a> {
-            Evidence { domain: d, tsd_len: tsd, tsd_mm: 0, motif, gap_frac: None, self_cov: 0.0, ltr_domain_hits: 0, identity: 95.0, pbs: false }
+            Evidence { domain: d, tsd_len: tsd, tsd_mm: 0, motif, gap_frac: None, self_cov: 0.0, ltr_domain_hits: 0, polya: false }
         }
-        assert!(decide(KeepLevel::Domain, None, 0.5, 70.0, &ev(Some(&ltr), 0, "AAAA")).keep);
-        assert!(!decide(KeepLevel::None, None, 0.5, 70.0, &ev(Some(&not), 6, "TGCA")).keep);
-        assert!(!decide(KeepLevel::Domain, None, 0.5, 70.0, &ev(None, 6, "TGCA")).keep);
-        assert!(decide(KeepLevel::Standard, None, 0.5, 70.0, &ev(None, 5, "TGCA")).keep);
-        assert!(decide(KeepLevel::Standard, None, 0.5, 70.0, &ev(None, 4, "TGCA")).keep);
-        assert!(!decide(KeepLevel::Standard, None, 0.5, 70.0, &ev(None, 3, "TGCA")).keep);
-        assert!(!decide(KeepLevel::Standard, None, 0.5, 70.0, &ev(None, 5, "TGAA")).keep);
-        assert!(decide(KeepLevel::Loose, None, 0.5, 70.0, &ev(None, 5, "TGAA")).keep);
-        assert!(decide(KeepLevel::Loose, None, 0.5, 70.0, &ev(None, 4, "TGCA")).keep);
-        assert!(!decide(KeepLevel::Loose, None, 0.5, 70.0, &ev(None, 4, "TGAA")).keep);
-        let d = decide(KeepLevel::Standard, None, 0.5, 70.0, &ev(Some(&ltr), 5, "TGCA"));
+        assert!(decide(KeepLevel::Domain, None, 0.5, &ev(Some(&ltr), 0, "AAAA")).keep);
+        assert!(!decide(KeepLevel::None, None, 0.5, &ev(Some(&not), 6, "TGCA")).keep);
+        assert!(!decide(KeepLevel::Domain, None, 0.5, &ev(None, 6, "TGCA")).keep);
+        assert!(decide(KeepLevel::Standard, None, 0.5, &ev(None, 5, "TGCA")).keep);
+        assert!(decide(KeepLevel::Standard, None, 0.5, &ev(None, 4, "TGCA")).keep);
+        assert!(!decide(KeepLevel::Standard, None, 0.5, &ev(None, 3, "TGCA")).keep);
+        assert!(!decide(KeepLevel::Standard, None, 0.5, &ev(None, 5, "TGAA")).keep);
+        assert!(decide(KeepLevel::Loose, None, 0.5, &ev(None, 5, "TGAA")).keep);
+        assert!(decide(KeepLevel::Loose, None, 0.5, &ev(None, 4, "TGCA")).keep);
+        assert!(!decide(KeepLevel::Loose, None, 0.5, &ev(None, 4, "TGAA")).keep);
+        let d = decide(KeepLevel::Standard, None, 0.5, &ev(Some(&ltr), 5, "TGCA"));
         assert!(d.keep);
         assert_eq!(d.why, "domain,tsd5,tgca");
-        assert_eq!(decide(KeepLevel::Standard, None, 0.5, 70.0, &ev(Some(&not), 0, "TGCA")).why, "veto:notLTR");
+        assert_eq!(decide(KeepLevel::Standard, None, 0.5, &ev(Some(&not), 0, "TGCA")).why, "veto:notLTR");
     }
 
     #[test]
     fn tandem_veto() {
         let ltr = call("LTR");
-        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, tsd_mm: 0, motif: "TGCA", gap_frac: None, self_cov: 0.8, ltr_domain_hits: 0, identity: 95.0, pbs: false };
-        let d = decide(KeepLevel::None, None, 0.5, 70.0, &ev);
+        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, tsd_mm: 0, motif: "TGCA", gap_frac: None, self_cov: 0.8, ltr_domain_hits: 0, polya: false };
+        let d = decide(KeepLevel::None, None, 0.5, &ev);
         assert!(!d.keep);
         assert_eq!(d.why, "veto:tandem0.80");
-        assert!(decide(KeepLevel::None, None, 0.9, 70.0, &ev).keep);
+        assert!(decide(KeepLevel::None, None, 0.9, &ev).keep);
+    }
+
+    #[test]
+    fn polya_veto() {
+        let ltr = call("LTR");
+        let mut ev = Evidence { domain: Some(&ltr), tsd_len: 0, tsd_mm: 0, motif: "ACAA", gap_frac: None, self_cov: 0.0, ltr_domain_hits: 0, polya: true };
+        assert_eq!(decide(KeepLevel::Standard, None, 0.99, &ev).why, "veto:polyA");
+        ev.motif = "TGCA";
+        assert!(decide(KeepLevel::Standard, None, 0.99, &ev).keep);
     }
 
     #[test]
     fn ltr_domain_veto() {
         let ltr = call("LTR");
-        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, tsd_mm: 0, motif: "TGCA", gap_frac: None, self_cov: 0.0, ltr_domain_hits: 2, identity: 95.0, pbs: false };
-        let d = decide(KeepLevel::None, None, 0.99, 70.0, &ev);
+        let ev = Evidence { domain: Some(&ltr), tsd_len: 6, tsd_mm: 0, motif: "TGCA", gap_frac: None, self_cov: 0.0, ltr_domain_hits: 2, polya: false };
+        let d = decide(KeepLevel::None, None, 0.99, &ev);
         assert!(!d.keep);
         assert_eq!(d.why, "veto:ltrdomain2");
     }
@@ -196,11 +204,11 @@ mod tests {
     #[test]
     fn gap_filter_applies_only_when_measured() {
         let ltr = call("LTR");
-        let mut ev = Evidence { domain: Some(&ltr), tsd_len: 0, tsd_mm: 0, motif: "TGCA", gap_frac: Some(0.3), self_cov: 0.0, ltr_domain_hits: 0, identity: 95.0, pbs: false };
-        assert!(!decide(KeepLevel::Domain, Some(0.1), 0.5, 70.0, &ev).keep);
-        assert!(decide(KeepLevel::Domain, None, 0.5, 70.0, &ev).keep);
+        let mut ev = Evidence { domain: Some(&ltr), tsd_len: 0, tsd_mm: 0, motif: "TGCA", gap_frac: Some(0.3), self_cov: 0.0, ltr_domain_hits: 0, polya: false };
+        assert!(!decide(KeepLevel::Domain, Some(0.1), 0.5, &ev).keep);
+        assert!(decide(KeepLevel::Domain, None, 0.5, &ev).keep);
         ev.gap_frac = None;
-        assert!(decide(KeepLevel::Domain, Some(0.1), 0.5, 70.0, &ev).keep);
+        assert!(decide(KeepLevel::Domain, Some(0.1), 0.5, &ev).keep);
     }
 
     #[test]
@@ -210,21 +218,5 @@ mod tests {
         write_element(&mut out, "s", text, 2, (2, 5, 14, 17), "unknown", "domain").unwrap();
         let s = String::from_utf8(out).unwrap();
         assert_eq!(s, ">s:1..4_LTR#LTR/unknown domain\nAAAA\n>s:5..12_INT#LTR/unknown domain\nCCCCGGGG\n>s:13..16_LTR#LTR/unknown domain\nTTTT\n");
-    }
-
-    #[test]
-    fn low_identity_domain_only() {
-        let ltr = call("LTR");
-        let mut ev = Evidence { domain: Some(&ltr), tsd_len: 0, tsd_mm: 0, motif: "ATAT", gap_frac: None, self_cov: 0.0, ltr_domain_hits: 0, identity: 69.9, pbs: false };
-        assert_eq!(decide(KeepLevel::Standard, None, 0.99, 70.0, &ev).why, "veto:lowid69.9");
-        assert!(decide(KeepLevel::Standard, None, 0.99, 0.0, &ev).keep);
-        ev.pbs = true;
-        assert!(decide(KeepLevel::Standard, None, 0.99, 70.0, &ev).keep);
-        ev.pbs = false;
-        ev.tsd_len = 4;
-        assert!(decide(KeepLevel::Standard, None, 0.99, 70.0, &ev).keep);
-        ev.tsd_len = 0;
-        ev.motif = "TGCA";
-        assert!(decide(KeepLevel::Standard, None, 0.99, 70.0, &ev).keep);
     }
 }

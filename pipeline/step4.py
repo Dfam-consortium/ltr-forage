@@ -37,15 +37,6 @@ for path,kind in ((int_hits,'I'),(ltr_hits,'L')):
         for a,b,ca,cb in ((eq,es,cq,cs),(es,eq,cs,cq)):
             d=cov[(a,b)]; old=d.get(kind,(0,0,0))
             if ca>old[0] or (ca==old[0] and p['bits']>old[2]): d[kind]=(ca,cb,p['bits'])
-best={}
-# optional: library-vs-curated hits (JIANG) label elements by curated family for the report
-for l in (open(os.environ['JIANG']) if os.environ.get('JIANG') else ()):
-    q,s,pid,ln,qs,qe,ql,bits=l.split('\t'); q=q.split('#')[0]
-    if float(pid)<80 or int(ln)<0.5*int(ql): continue
-    if q not in best or float(bits)>best[q][1]: best[q]=(s.split('#')[0].split('_')[0],float(bits))
-efam={}
-for rec,(e,k) in rec2elem.items():
-    if rec in best and (k=='I' or e not in efam): efam[e]=best[rec][0]
 parent={e:e for e in elems}
 def find(x):
     while parent[x]!=x: parent[x]=parent[parent[x]]; x=parent[x]
@@ -59,15 +50,7 @@ for (a,b),d in cov.items():
 def report(label, member):
     cores=collections.defaultdict(list)
     for e in elems: cores[member(e)].append(e)
-    per=collections.defaultdict(set); wrong=tot=0
-    for r,v in cores.items():
-        fs=collections.Counter(efam[e] for e in v if e in efam)
-        for e in v:
-            if e in efam: per[efam[e]].add(r)
-        if fs: tot+=sum(fs.values()); wrong+=sum(fs.values())-fs.most_common(1)[0][1]
-    cl=[len(v) for v in per.values()]
-    ex=' '.join(f"{f}:{len(per.get(f,[]))}" for f in ['Os0016','Os0028','Os0365','Os0119','Os0076','Os0039'])
-    print(f"{label}: {len(cores)} clusters ({sum(1 for v in cores.values() if len(v)==1)} singletons, largest {max(len(v) for v in cores.values())}); families in 1 {sum(1 for c in cl if c==1)}, 2-3 {sum(1 for c in cl if 2<=c<=3)}, 4-9 {sum(1 for c in cl if 4<=c<=9)}, 10+ {sum(1 for c in cl if c>=10)}; foreign-majority {100*wrong/max(1,tot):.1f}% | {ex}")
+    print(f"{label}: {len(cores)} clusters ({sum(1 for v in cores.values() if len(v)==1)} singletons, largest {max(len(v) for v in cores.values())})")
     return cores
 cores=report('phase 1 (INT both 80%, LTR shorter 80%)', find)
 # phase 2: attach singletons

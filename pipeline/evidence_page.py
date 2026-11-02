@@ -179,12 +179,13 @@ def main():
     for e in cand:
         m = re.match(r'(\S+):(\d+)\.\.(\d+)$', e); by_seq[m[1]].append((int(m[2]), int(m[3]), e))
     def element_of(rec):    # record name (elem_LTR / elem_INT, possibly a sub-range) -> candidate element
+        # library records come from kept candidates; with --overlaps evidence cand.tsv also holds the dropped
+        # calls overlapping them, so prefer a kept one, then the shortest that contains the record
         m = re.match(r'(\S+):(\d+)\.\.(\d+)_(LTR|INT)$', rec)
         if not m: return None
         s, x, y = m[1], int(m[2]), int(m[3])
-        for p_, q_, e in by_seq.get(s, ()):
-            if p_ <= x and y <= q_: return e
-        return None
+        hit = [(cand[e].get('keep') != '1', q_ - p_, e) for p_, q_, e in by_seq.get(s, ()) if p_ <= x and y <= q_]
+        return min(hit)[2] if hit else None
 
     # ---- genome masking, per model ------------------------------------------------------------
     mstat = collections.defaultdict(lambda: {'hits': 0, 'bp': 0, 'tp': 0, 'fp': 0, 'full': 0, 'seqs': set(), 'fpcls': collections.Counter(),

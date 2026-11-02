@@ -7,8 +7,7 @@ keep rates of the domain columns and the candidate rules. With a
 hmmsearch order call to each candidate and prints both callers side by side.
 
 ```
-ltr-forage hg38.sufr --reextend --internal-stats --format tsv \
-    --domain-hmm /usr/local/LTR_retriever-2.9.0/database/TEfam.hmm > hg38.tsv
+ltr-forage hg38.sufr --internal-stats > hg38.tsv
 python3 score_tsv.py ~/hg38.out hg38.tsv signals/features.tsv
 ```
 

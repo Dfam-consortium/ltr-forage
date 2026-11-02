@@ -12,7 +12,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # default: a rmblast-port checkout beside the LTRHarvest directory (ltr_library.py always sets RMBLASTN)
 RMB=${RMBLASTN:-$HERE/../../../rmblast-port/rmblast/target/release/rmblastn}
 B=${BATCHES:-16}; T=${THREADS:-4}
-mkdir -p "$out/batches"; cp "$lib" "$out/round0.fa"
+# a fresh batch directory: a rerun with fewer batches would otherwise concatenate the earlier run's extra h*.tsv
+# (mm10, 2026-10-25: a 16-batch rerun of a 24-batch step 22b counted a third of the sample twice)
+rm -rf "$out/batches"; mkdir -p "$out/batches"; cp "$lib" "$out/round0.fa"
 # split the sample into B batches of whole sequences, balanced by length
 python3 - "$sample" "$out/batches" "$B" <<'PY'
 import sys
@@ -25,6 +27,7 @@ size = [0] * B; fh = [open(f'{d}/q{i}.fa', 'w') for i in range(B)]
 for h, s in sorted(recs, key=lambda r: -sum(len(x) for x in r[1])):
     i = size.index(min(size)); fh[i].write(h + ''.join(s)); size[i] += sum(len(x) for x in s)
 PY
+pids=()
 for r in $(seq 1 "$rounds"); do
   hits="$out/hits$r.tsv"
   if [ "$r" = 1 ] && [ -n "${ROUND1_HITS:-}" ]; then cp "$ROUND1_HITS" "$hits"
@@ -34,8 +37,11 @@ for r in $(seq 1 "$rounds"); do
         --word-size 9 --xdrop-ungap 450 --xdrop-gap 112 --xdrop-gap-final 225 --min-raw-gapped-score 225 \
         --complexity-adjust --dust no --mask-level 80 --num-threads "$T" --mt-mode 0 \
         --outfmt "6 score qseqid qstart qend sseqid sstart send sstrand" > "$out/batches/h$i.tsv" &
-    done; wait
-    cat "$out"/batches/h*.tsv > "$hits"
+      pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p" || { echo "clean_library_rmb.sh: a rmblastn batch failed" >&2; exit 1; }; done
+    pids=()
+    for i in $(seq 0 $((B-1))); do cat "$out/batches/h$i.tsv"; done > "$hits"
   fi
   python3 "$HERE/hits_to_profile.py" "$out/round$((r-1)).fa" "$hits" > "$out/depth$r.tsv"
   python3 "$HERE/excise_by_depth.py" "$out/round$((r-1)).fa" "$out/depth$r.tsv" "$out/round$r.fa" --profile --scale "$scale" "$@" 2>&1 | tee "$out/round$r.log"

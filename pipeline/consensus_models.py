@@ -17,9 +17,11 @@ cannot be built keeps its exemplar.  LTR inputs longer than twice the cluster's 
 family.py and the reports trace them as before.  Validated on rice, 2026-10-19 (experiment 2, arm T): 273
 curated families recovered in full against 260 for exemplars, precision 98.26 vs 98.24.  With the column
 gate (arm G): rice 273, precision 98.27; lotus 250 vs 225 for exemplars, precision 92.50 vs 92.36 (ends-only
-trimming: 83.90).
+trimming: 83.90).  A cluster with more than --max-copies inputs of a kind gets the consensus of a seeded random
+sample of that many (the same sample on every run); random keeps the mix of full-length and truncated copies the
+column gate depends on (mm10, 2026-10-24: a 2,006-copy chrY INT cluster took 107 min, all of step 13).
 """
-import argparse, collections, json, os, re, subprocess, sys
+import argparse, collections, json, os, random, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 
 RC = str.maketrans('ACGTNacgtn', 'TGCANtgcan')
@@ -70,6 +72,8 @@ def main():
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--te-composer', required=True)
     ap.add_argument('--work', default='cons')
+    ap.add_argument('--max-copies', type=int, default=150,
+                    help='build a consensus from at most this many copies, a seeded random sample (150; 0: all)')
     ap.add_argument('--big-only', action='store_true',
                     help='write only clusters of >= --min-cons elements (stage B representatives)')
     ap.add_argument('--premade', help='models already built (stage B reps.fa): core records of the same name get no new consensus')
@@ -111,6 +115,8 @@ def main():
             # 1,229 bp (+8.3 Mb)
             med = sorted(len(raw[r]) for r in names)[len(names) // 2]
             names = [r for r in names if len(raw[r]) <= 2 * med]
+        if a.max_copies and len(names) > a.max_copies:
+            names = random.Random(f'{c}_{kind}').sample(sorted(names), a.max_copies)
         return names
 
     def consensus(c, kind):

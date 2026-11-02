@@ -6,7 +6,7 @@
 # Env: THREADS (32), RMBLASTN (port binary), WORD (seed word size, 12; 9-16 give the same 80-80 pairs and scores, see runs/aligner_rmb_word), MATRIX (default 20p<GC>g for the db's GC, pick_matrix.sh),
 #      CHUNK (2000 queries per rmblastn call: --mt-mode 1 holds a call's results in memory until it ends),
 #      MT_MODE (1: split by queries, streamed in input order, the default; rmblastn 3.0.10's --mt-mode 1 can
-#      deadlock, use 3.0.9 or >= 3.0.11, or MT_MODE=0).
+#      deadlock, use 3.0.9 or >= 3.0.11, or MT_MODE=0), MIN_PID (drop hits below this pident).
 # Search: RepeatMasker's -lib settings except the word (gap 24/6, X-drops 450/112/225, minscore 225),
 # no mask level (a self-comparison would hide every hit behind the self-hit), E <= 1e-10.
 # pident/length are BLAST's: length = alignment columns = query span + query gaps,
@@ -27,13 +27,14 @@ for qf in "$CH"/q*.fa; do
   --xdrop-ungap 450 --xdrop-gap 112 --xdrop-gap-final 225 --min-raw-gapped-score 225 --evalue 1e-10 \
   --complexity-adjust --dust no --mask-level -1 --num-threads ${THREADS:-32} --mt-mode ${MT_MODE:-1} \
   --outfmt "6 qseqid sseqid qstart qend sstart send qlen slen perc_sub perc_query_gap perc_db_gap bitscore" 2>> "$OUT.log" |
-awk -F'\t' -v OFS='\t' -v maxh="$MAXH" -v fields="$*" '
+awk -F'\t' -v OFS='\t' -v maxh="$MAXH" -v fields="$*" -v minpid="${MIN_PID:-0}" '
 BEGIN { nf = split(fields, F, " ") }
 $1 != cq { cq = $1; delete seen }
 ++seen[$2] <= maxh {
   qspan = $4 - $3 + 1; sspan = ($5 > $6 ? $5 - $6 : $6 - $5) + 1
   qg = int($10 * qspan / 100 + 0.5); sg = int($11 * sspan / 100 + 0.5); x = int($9 * qspan / 100 + 0.5)
   len = qspan + qg; v["length"] = len; v["pident"] = sprintf("%.3f", 100 * (len - x - qg - sg) / len)
+  if (v["pident"] + 0 < minpid) next
   v["qseqid"] = $1; v["sseqid"] = $2; v["qstart"] = $3; v["qend"] = $4; v["sstart"] = $5; v["send"] = $6
   v["qlen"] = $7; v["slen"] = $8; v["bitscore"] = $12
   line = v[F[1]]; for (i = 2; i <= nf; i++) line = line OFS v[F[i]]

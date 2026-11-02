@@ -10,7 +10,7 @@
 set -eo pipefail
 G=$1; SUFR=$2; DREF=$3; SCALE=$4; MIND=$5; ABSD=$6; OUT=$7
 HERE=$(cd "$(dirname "$0")" && pwd); B=$(dirname "$HERE"); P=$(cd "$HERE/../../../pipeline" && pwd)   # the driver's step scripts
-T=${THREADS:-32}; HMM=${HMM:-/usr/local/LTR_retriever-2.9.0/database/TEfam.hmm}
+T=${THREADS:-32}; HMM=${HMM:-$B/../../data/TEfam.hmm}
 LF=${LTRFORAGE:-$B/../../target/release/ltr-forage}   # this checkout's release build
 AVA="qseqid sseqid pident length qstart qend sstart send qlen slen bitscore"
 mkdir -p $OUT/elem; cd $OUT
@@ -22,11 +22,13 @@ search() {
        blastn -task dc-megablast -query $q -db $db.db -evalue 1e-10 -num_threads $T -max_target_seqs 20000 -max_hsps $mh -outfmt "6 $*" > $o 2> /dev/null; fi; }
 ava() { search $1 $1 5 $2 $AVA; }
 step() { echo "[$(date +%T)] $*" | tee -a steps.log; }
-export TSV=$OUT/cand.tsv JIANG=/dev/null
+export TSV=$OUT/cand.tsv
 if [ "${START:-1}" -le 6 ]; then
 # 1-5: detect, re-extend, annotate/decide, library
 step "1-5 ltr-forage"
-$LF $SUFR --reextend --reextend-ltr-max 7000 --format tsv --domain-hmm $HMM --nail ${NAIL:-nail} --mmseqs ${MMSEQS:-mmseqs} --domain-tmp $OUT --library lib.raw.fa -j $T > cand.tsv 2> ltr-forage.err
+# ltr-forage's defaults have changed since the 2026-10-15 runs (FasTAN mask, no TSD boundary move,
+# near-duplicate merge, evidence overlaps); --no-fastan --dedup-tol 0 --overlaps best comes closest
+$LF $SUFR --domain-hmm $HMM --nail ${NAIL:-nail} --mmseqs ${MMSEQS:-mmseqs} --temp-dir $OUT --library lib.raw.fa -j $T > cand.tsv 2> ltr-forage.err
 awk '/^>/{print $1} !/^>/' lib.raw.fa > lib.fa
 # 6: depth cleanup, three rounds (rmblastn of the depth sample against the library, RepeatMasker -lib settings)
 step "6 depth cleanup"

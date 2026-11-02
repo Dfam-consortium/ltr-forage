@@ -3,8 +3,8 @@
 # otherwise the multi-element cluster whose internal records cover most of it.  A 50 bp bin is
 # cut when an LTR record aligns across it as a whole copy (80% of the LTR record, at least 100 bp)
 # and no internal record of the voting cluster covers the bin.  Runs shorter than 100 bp stay.
-# usage: nested_vote.py <allvsall.tsv> <clusters.json> <records.fa> <out.fa>   (env JIANG optional)
-import sys, os, json, collections, bisect
+# usage: nested_vote.py <allvsall.tsv> <clusters.json> <records.fa> <out.fa>
+import sys, json, collections, bisect
 ava, clusfile, recfa, outfa = sys.argv[1:5]
 BIN=50; MIN_ID=80.0
 clus=json.load(open(clusfile))
@@ -62,18 +62,3 @@ with open(outfa,'w') as out:
         keep.append(sq[pos:]); new=''.join(keep); n_bp+=len(sq)-len(new)
         if len(new)>=50: out.write(f">{names[q]}\n{new}\n")
 print(f"records cut: {len(cuts)}, bases removed: {n_bp:,}")
-jp=os.environ.get('JIANG')
-if jp:
-    hits=collections.defaultdict(list)
-    for l in open(jp):
-        q,s,pid,ln,qs,qe,ql,bits=l.split('\t'); q=q.split('#')[0]
-        if float(pid)>=80: hits[q].append((int(qs),int(qe),'LTR' if '_LTR' in s else 'INT'))
-    bp=collections.Counter()
-    for q,iv in cuts.items():
-        for a,b in iv:
-            ov=collections.Counter()
-            for x,y,k in hits.get(q,[]):
-                o=min(y,b)-max(x,a)+1
-                if o>0: ov[k]+=o
-            bp['none' if not ov else ov.most_common(1)[0][0]]+=b-a+1
-    print("cut bases by curated content:",dict(bp))

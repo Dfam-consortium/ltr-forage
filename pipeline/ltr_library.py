@@ -3,50 +3,67 @@
 
 usage: ltr_library.py <genome.fa> -o <outdir> [-t THREADS] [options]
 
-Steps (logs in <outdir>/logs, timings in <outdir>/steps.log):
-   0  index      sufr suffix array of the genome (skipped with --sufr)
+Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continue ltr-forage's log steps
+1-11 and match the boxes of the pipeline figure):
    0  sample     depth sample: the whole genome up to --sample-above Mb, else a random
                  --sample-frac of its --window-kb windows (seeded); depth floors are scaled to it
- 1-5  ltr-forage detect, re-extend, annotate (domains, TSD, PBS), decide, raw library; tandem arrays
+   1  index      sufr suffix array of the genome (skipped with --sufr)
+1-11  ltr-forage detect, re-extend, annotate (domains, TSD, PBS), decide, raw library; tandem arrays
                  found by ltr-forage's FasTAN port (satellites, simple repeats, tandem copies; any unit up to
                  30 kb) are masked from the seed search (tandem.bed; --no-fastan), and --mask-bed adds
-                 intervals of one's own.  No TSD boundary adjustment during extension (--mintsd 0): TSD and
-                 TG..CA are evidence at the final boundaries.  Calls whose re-extended ends agree within
-                 20 bp are merged, and overlapping calls are resolved by --overlaps
-   5b precluster element clusters of the raw library (all-vs-all, as step 8)
-   5c premodels  te-composer consensus for raw clusters of >= --min-cons elements; from here on
-                 each big cluster is represented by its consensus, and steps 6-9 work on the elements of
+                 intervals of one's own.  TSD and TG..CA are evidence at the final boundaries (the TSD
+                 search does not move the ends, as LTRharvest's does).  Calls whose re-extended ends agree
+                 within 20 bp are merged, and overlapping calls are resolved by --overlaps
+  12  precluster element clusters of the raw library (all-vs-all, as step 16)
+  13  premodels  te-composer consensus for raw clusters of >= --min-cons elements; from here on
+                 each big cluster is represented by its consensus, and steps 14-16 work on the elements of
                  smaller clusters plus those representatives (the members of a big cluster join the
-                 cluster of its representative after step 9).  5b-5c are stage B, the default;
-                 --stage-a (or --min-cons < 2) skips them and steps 6-9 work on every element
-   6  depth      three rounds: rmblastn of the sample against the library, excise stretches far
+                 cluster of its representative after step 16).  12-13 are stage B, the default;
+                 --stage-a (or --min-cons < 2) skips them and steps 14-16 work on every element
+  14  depth      three rounds: rmblastn of the sample against the library, excise stretches far
                  above their record's own genome depth (nested passengers), drop high-depth LTRs.
                  A representative is cut only at 10x its own depth and never dropped: a big family's
                  consensus is high-copy itself, while a real insertion stands far above it
-   7  nested     first element clustering (library all-vs-all), nested LTR excision by vote
- 8-9  cluster    element clusters and one exemplar element per cluster
-   9b flank      flag clusters whose copies share both flanks (segmental duplications; --no-flank):
+  15  nested     first element clustering (library all-vs-all), nested LTR excision by vote
+  16  cluster    element clusters and one exemplar element per cluster
+  17  flank      flag clusters whose copies share both flanks (segmental duplications; --no-flank):
                  most pairs share both flanks, or every copy shares both with some other copy
-  10  contain    drop exemplars contained in another at >= 0.9
-  11  excise     nested LTR excision from internals, two rounds
-  12  pbs        primer binding site per element (ltr-forage's tRNA search)
-  13  tier       keep multi-element clusters; singletons with LTR identity >= 93 or a PBS
-                 (--tier strict: identity >= 90 and a PBS)
-  13b models     te-composer consensus for clusters of >= --min-cons elements (oriented, columns held
+  18  contain    drop exemplars contained in another at >= 0.9
+  19  excise     nested LTR excision from internals, two rounds
+  20  pbs        primer binding site per element (ltr-forage's tRNA search)
+  21  tier       keep multi-element clusters; singletons with LTR identity >= 93 or a PBS
+                 (--tier strict: identity >= 90 and a PBS; --tier all: every singleton)
+  22  models     te-composer consensus for clusters of >= --min-cons elements (oriented, columns held
                  by under half the median occupancy dropped; the exemplar where none can be built), the
-                 exemplar for smaller ones; a stage B representative is kept as steps 6-11 left it;
+                 exemplar for smaller ones; a stage B representative is kept as steps 14-19 left it;
                  flagged segmental-duplication clusters left out (--min-cons 0: exemplars only)
-  14  families   80-80 families (LTRs and internals both), gap-aware, Gypsy/Copia class names
-  15  evidence   --evidence-page: evidence.html, one dossier per family from its founding element
+ 22b  mdepth     one more depth round on the finished models, as step 14: a consensus model (stage B
+                 representative, or one step 22 built) is cut at 10x its own depth, an exemplar at 5x (--model-depth-ratio; at 3x
+                 conserved stretches of old families were cut: ath Gypsy-8_ALY, 3.1x); none is
+                 dropped (without step 14's competition a singleton exemplar of a high-copy LTR family would
+                 pass --abs-depth whole).  Step 14 runs with mask level 80,
+                 so a non-LTR passenger shared by many records splits its sample copies among them and
+                 each sees a low depth; a consensus model can also take back a passenger its founder
+                 lost (mm10: L1 and B1/B2 pieces in five models masked 191 Mb outside annotated LTRs).
+                 --no-model-depth skips it.  An internal model with more than --int-copies-max genome
+                 copies per element of its cluster is dropped: internals are never solo, so it is mostly
+                 another repeat (mm10 --early-tier: an L1 exemplar internal, 5,999 per element, 133 Mb
+                 outside the curated LTRs; at most 707 for any other model in six genomes)
+  23  families   80-80 families (LTRs and internals both), gap-aware, Gypsy/Copia class names
+ 23b  seeds      library.stk, a seed alignment for every record: its best --seed-copies non-overlapping
+                 copies in the depth sample (the record's origin element when the sample has none),
+                 aligned to the unchanged record by te-composer --fixed-cons, so #=GC RF is the record.
+                 A te-composer without --fixed-cons (before 0.6.8) gives one-row alignments (the record alone)
+  24  evidence   --evidence-page: evidence.html, one dossier per family from its founding element
                  (structure, domains, PBS, copies, verdict; pipeline/evidence_page.py, which also takes a
                  genome mask, a curated annotation and another tool's mask when run by hand)
 
-Outputs: library.fa (fam<N>_v<k>_LTR|INT#LTR/<class>), families.tsv, cand.tsv (every candidate
+Outputs: library.fa (fam<N>_v<k>_LTR|INT#LTR/<class>), library.stk, families.tsv, cand.tsv (every candidate
 element, ltr-forage's table), evidence.html with --evidence-page.  A rerun skips finished steps (<outdir>/.done); --from STEP
 reruns from a step on.
 
 Stage B against stage A (2026-10-20; sensitivity / precision of LTR masking against curated libraries):
-rice 92.70 / 98.53 vs 92.51 / 98.29, zebra finch 74.76 / 83.03 vs 74.67 / 83.45 with steps 6-14 in 16 min
+rice 92.70 / 98.53 vs 92.51 / 98.29, zebra finch 74.76 / 83.03 vs 74.67 / 83.45 with steps 14-23 (then numbered 6-14) in 16 min
 instead of ~109, gorilla 34.57 / 97.65 (HiRepEat 17.68 / 95.97).  Most of zebra finch's remaining FP is
 outside the curated library and much of it looks like real families HiRepEat also finds: FP rules need
 an artifact mechanism, not lower novelty.
@@ -54,12 +71,12 @@ an artifact mechanism, not lower novelty.
 External programs: ltr-forage, sufr, rmblastn (Rust), te-composer (dfam-curator >= 0.6.6), and nail
 (>= 0.7.1) with MMseqs2 for ltr-forage's domain search, found from the options, the environment (LTRFORAGE,
 SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy."""
-import argparse, os, random, re, shutil, subprocess, sys, time
+import argparse, concurrent.futures, os, random, re, shutil, subprocess, sys, time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))   # through symlinks (an LTR_FORAGE_DIR of links)
 ROOT = os.path.dirname(HERE)
-STEPS = ['index', 'sample', 'ltr-forage', 'precluster', 'premodels', 'depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier',
-         'models', 'families', 'evidence']
+STEPS = ['sample', 'index', 'ltr-forage', 'precluster', 'premodels', 'depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier',
+         'models', 'mdepth', 'families', 'seeds', 'evidence']
 AVA = 'qseqid sseqid pident length qstart qend sstart send qlen slen bitscore'.split()
 
 
@@ -147,7 +164,7 @@ class Run:
             for s in STEPS[STEPS.index(a.from_step):]:
                 p = self.done_path(s)
                 if os.path.exists(p): os.remove(p)
-        # stage A and B outputs from step 5b on don't mix: a rerun keeps the mode its finished steps were made in
+        # stage A and B outputs from step 12 on don't mix: a rerun keeps the mode its finished steps were made in
         mode = 'B' if a.stage_b else 'A'
         mf = self.done_path('mode')
         made = open(mf).read().strip() if os.path.exists(mf) else ('B' if os.path.exists(self.path('reps.fa')) else 'A')
@@ -181,8 +198,33 @@ class Run:
     def py(self, script, *args, log, stdout=None):
         self.sh([sys.executable, os.path.join(HERE, script), *args], log, stdout)
 
-    def search(self, q, db, max_hsps, out, fields, log):
-        self.sh(['bash', os.path.join(HERE, 'rmb_ava.sh'), q, db, max_hsps, out, *fields], log)
+    def search(self, q, db, max_hsps, out, fields, log, clustering=False, by_kind=False):
+        """rmb_ava.sh of q against db.  by_kind: two searches, LTR records against LTR records and internals
+        against internals (q must be db), for readers that skip LTR-INT hits (step4.py, family.py).
+        clustering (implies by_kind): also drop hits below 80% identity as they are written; step4.py reads
+        only same-kind hits of >= 80% (mm10 raw library: 80.5 M hits, 9.7 GB, of which 45 M kept)."""
+        env = dict(self.env)
+        if clustering: self.env['MIN_PID'] = '80'; by_kind = True
+        try:
+            if not by_kind:
+                self.sh(['bash', os.path.join(HERE, 'rmb_ava.sh'), q, db, max_hsps, out, *fields], log); return
+            assert q == db
+            base = os.path.splitext(out)[0]
+            # the matrix of the whole library, as one search would pick (LTRs and internals differ in GC)
+            if 'MATRIX' not in self.env:
+                self.env['MATRIX'] = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), q], cwd=self.out,
+                                                    capture_output=True, text=True, check=True).stdout.strip()
+            with open(self.path(base + '.LTR.fa'), 'w') as fl, open(self.path(base + '.INT.fa'), 'w') as fi:
+                for n, x in read_fasta(self.path(q)):
+                    (fi if n.split('#')[0].endswith('_INT') else fl).write(f'>{n}\n{x}\n')
+            for k in ('LTR', 'INT'):
+                f = f'{base}.{k}.fa'
+                self.sh(['bash', os.path.join(HERE, 'rmb_ava.sh'), f, f, max_hsps, f'{base}.{k}.tsv', *fields], log)
+            with open(self.path(out), 'w') as fo:
+                for k in ('LTR', 'INT'):
+                    with open(self.path(f'{base}.{k}.tsv')) as fh: shutil.copyfileobj(fh, fo)
+                    os.remove(self.path(f'{base}.{k}.tsv')); os.remove(self.path(f'{base}.{k}.fa'))
+        finally: self.env = env
 
     def step(self, name, title, fn):
         if os.path.exists(self.done_path(name)):
@@ -221,19 +263,17 @@ class Run:
         return dict(l.rstrip('\n').split('\t') for l in open(self.path('sample.txt')))
 
     def ltr_forage(self):
-        self.sh([self.a.ltr_forage, self.sufr, '--reextend', '--reextend-ltr-max', 7000, '--format', 'tsv',
-                 '--domain-hmm', self.a.domain_hmm, '--library', 'lib.raw.fa', '-j', self.a.threads,
-                 '--nail', self.a.nail, '--mmseqs', self.a.mmseqs, '--domain-tmp', self.out,
-                 '--mintsd', 0, '--dedup-tol', 20, '--overlaps', self.a.overlaps,
-                 *([] if self.a.no_fastan else ['--fastan', '--fastan-out', 'tandem.bed']),
-                 *(['--mask-bed', os.path.abspath(self.a.mask_bed)] if self.a.mask_bed else [])],
+        self.sh([self.a.ltr_forage, self.sufr, '--library', 'lib.raw.fa', '--threads', self.a.threads,
+                 '--domain-hmm', self.a.domain_hmm, '--nail', self.a.nail, '--mmseqs', self.a.mmseqs, '--temp-dir', self.out,
+                 '--overlaps', self.a.overlaps, *(['--no-fastan'] if self.a.no_fastan else ['--fastan-out', 'tandem.bed']),
+                 *(['--mask-bed', os.path.abspath(self.a.mask_bed)] if self.a.mask_bed else []), *self.a.forage_arg],
                 'ltr-forage.log', stdout='cand.tsv')
         with open(self.path('lib.raw.fa')) as fi, open(self.path('lib.fa'), 'w') as fo:
             for l in fi: fo.write(l.split()[0] + '\n' if l.startswith('>') else l)
 
     def precluster(self):
         if not self.a.stage_b: return
-        self.search('lib.fa', 'lib.fa', 5, 'raw_ava.tsv', AVA, 'precluster.log')
+        self.search('lib.fa', 'lib.fa', 5, 'raw_ava.tsv', AVA, 'precluster.log', clustering=True)
         self.py('step4.py', 'raw_ava.tsv', 'raw_ava.tsv', 'elem/clusters_raw.json', log='precluster.log', stdout='elem/raw.txt')
         self.py('exemplar_lib.py', 'elem/clusters_raw.json', 'lib.fa', 'exemplar_raw.fa', log='precluster.log')
         self.log('  ' + open(self.path('elem', 'raw.txt')).read().strip().split('\n')[-1])
@@ -241,6 +281,10 @@ class Run:
     def premodels(self):
         if not self.a.stage_b: return
         a = self.a
+        # --early-tier: raw singletons the tier would reject leave before the depth cleanup (without it the
+        # full raw library is restored, so the option can be switched on a --from premodels rerun)
+        self.py('early_tier.py', '.', a.tier if a.early_tier else 'all', log='premodels.log', stdout='early_tier.txt')
+        if a.early_tier: self.log('  ' + open(self.path('early_tier.txt')).read().strip())
         self.sh([sys.executable, os.path.join(HERE, 'consensus_models.py'), 'exemplar_raw.fa', 'lib.fa', 'elem/clusters_raw.json',
                  'reps.fa', '--big-only', '--min-cons', a.min_cons, '--jobs', max(1, a.threads // 2),
                  '--te-composer', a.te_composer, '--work', 'cons'], 'premodels.log', stdout='premodels.txt')
@@ -252,12 +296,13 @@ class Run:
         p = self.params()
         mtx = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), 'depth_sample.fa'], cwd=self.out,
                              capture_output=True, text=True, check=True).stdout.strip()
-        batches = 16
-        self.env['BATCHES'] = str(batches)
-        self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'depth_lib.fa' if self.a.stage_b else 'lib.fa', 'depth_sample.fa', 'clean', 3, p['scale'], mtx,
+        # one single-thread batch per thread (was 16 batches of threads // 16: at -t 24, 8 cores idle); every sample
+        # sequence is searched on its own, so the hits do not depend on the batching
+        self.env['BATCHES'] = str(self.a.threads)
+        self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'depth_lib.fa' if self.a.stage_b else 'lib.fa', 'depth_sample.fa', 'clean', self.a.depth_rounds, p['scale'], mtx,
                  '--ratio', 3, '--min-depth', p['min_depth'], '--min-len', 50, '--abs-depth', p['abs_depth'], '--drop-frac', 0.7,
                  *(['--consensus', 'reps.fa'] if self.a.stage_b else [])],
-                'depth.log', threads=max(1, self.a.threads // batches))
+                'depth.log', threads=1)
         if self.a.stage_b:
             # representatives stay in the search (so hits compete for the sample as in stage A) and take its
             # excisions, but one that depth cleanup dropped outright comes back as its consensus: a big family's
@@ -279,7 +324,7 @@ class Run:
                 log='nested.log', stdout='nested_cut.txt')
 
     def cluster(self):
-        self.search('clean_nested.fa', 'clean_nested.fa', 5, 'nested_ava.tsv', AVA, 'cluster.log')
+        self.search('clean_nested.fa', 'clean_nested.fa', 5, 'nested_ava.tsv', AVA, 'cluster.log', clustering=True)
         if self.a.stage_b:
             self.py('step4.py', 'nested_ava.tsv', 'nested_ava.tsv', 'elem/clusters_red.json', log='cluster.log', stdout='elem/nested.txt')
             self.sh([sys.executable, os.path.join(HERE, 'stage_b.py'), 'expand', 'elem/clusters_raw.json', 'elem/reps.json',
@@ -325,21 +370,123 @@ class Run:
                 fo.write(f"{r['seq']}:{r['elem_start']}..{r['elem_end']}\t{r['pbs_mm12']}\t{r['pbs_trna']}\t{r['pbs_offset']}\n")
 
     def tier(self):
-        opt = ['--min-id', 90, '--pbs', 'pbs.tsv', '--strict'] if self.a.tier == 'strict' else ['--min-id', 93, '--pbs', 'pbs.tsv']
+        opt = {'strict': ['--min-id', 90, '--pbs', 'pbs.tsv', '--strict'], 'pbs': ['--min-id', 93, '--pbs', 'pbs.tsv'],
+               'all': ['--min-id', 0, '--max-len', 10 ** 9]}[self.a.tier]
         self.py('tier.py', 'final.fa', 'elem/clusters_nested.json', 'cand.tsv', 'core.fa', 'candidates.fa', *opt,
                 log='tier.log', stdout='tier.txt')
 
     def models(self):
         a = self.a
         self.sh([sys.executable, os.path.join(HERE, 'consensus_models.py'), 'core.fa', 'lib.fa', 'elem/clusters_nested.json',
-                 'models.fa', '--sd', 'sd_clusters.tsv', '--min-cons', a.min_cons if a.min_cons > 0 else 10 ** 9,
+                 'models.nodepth.fa', '--sd', 'sd_clusters.tsv', '--min-cons', a.min_cons if a.min_cons > 0 else 10 ** 9,
                  '--jobs', max(1, a.threads // 2), '--te-composer', a.te_composer, '--work', 'cons',
                  *(['--premade', 'reps.fa'] if a.stage_b else [])], 'models.log', stdout='models.txt')
 
+    def mdepth(self):
+        if self.a.no_model_depth:
+            shutil.copy(self.path('models.nodepth.fa'), self.path('models.fa')); return
+        p = self.params()
+        mtx = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), 'depth_sample.fa'], cwd=self.out,
+                             capture_output=True, text=True, check=True).stdout.strip()
+        # consensus models: stage B representatives and records step 22 replaced by a consensus
+        core = dict(read_fasta(self.path('core.fa')))
+        reps = {n.split('#')[0] for n, _ in read_fasta(self.path('reps.fa'))} if self.a.stage_b else set()
+        with open(self.path('models.cons.fa'), 'w') as fh:
+            for n, s in read_fasta(self.path('models.nodepth.fa')):
+                k = n.split('#')[0]
+                if k in reps or core.get(n, '').upper() != s.upper(): fh.write(f'>{k}\n{s}\n')
+        self.env['BATCHES'] = str(self.a.threads)
+        self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'models.nodepth.fa', 'depth_sample.fa', 'mclean', 1, p['scale'],
+                 mtx, '--ratio', self.a.model_depth_ratio, '--min-depth', p['min_depth'], '--min-len', 50, '--consensus', 'models.cons.fa'],
+                'mdepth.log', threads=1)
+        shutil.copy(self.path('mclean', 'clean.fa'), self.path('models.fa'))
+        self.log('  ' + open(self.path('mclean', 'round1.log')).read().strip().split('\n')[-1])
+        if self.a.int_copies_max:
+            self.py('int_copies.py', 'models.fa', 'mclean/depth1.tsv', 'elem/clusters_nested.json', p['scale'],
+                    self.a.int_copies_max, 'int_copies.tsv', log='mdepth.log', stdout='int_copies.txt')
+            self.log('  ' + open(self.path('int_copies.txt')).read().strip())
+
     def families(self):
-        self.search('models.fa', 'models.fa', 5, 'core_ava.tsv', AVA, 'families.log')
+        self.search('models.fa', 'models.fa', 5, 'core_ava.tsv', AVA, 'families.log', by_kind=True)
         self.py('family.py', 'models.fa', 'core_ava.tsv', 'library.fa', 'families.tsv', '--rule', 'and', '--cand', 'cand.tsv',
                 '--gap-aware', log='families.log')
+
+    def seeds(self):
+        a = self.a
+        os.makedirs(self.path('seeds'), exist_ok=True)
+        self.search('library.fa', 'depth_sample.fa', 50, 'seeds/hits.tsv', ['qseqid', 'sseqid', 'sstart', 'send', 'bitscore'], 'seeds.log')
+        hits = {}
+        for l in open(self.path('seeds', 'hits.tsv')):
+            q, sid, ss, se, bits = l.rstrip('\n').split('\t')
+            hits.setdefault(q, []).append((float(bits), sid, min(int(ss), int(se)), max(int(ss), int(se))))
+        recs, origin = [], {}
+        with open(self.path('library.fa')) as fh:
+            for l in fh:
+                if l.startswith('>'):
+                    f = l[1:].split(); recs.append(f[0])
+                    o = [x[7:] for x in f[1:] if x.startswith('origin=')]
+                    if o: origin[f[0]] = o[0]
+        # each record's best copies, highest score first, none overlapping another already taken
+        pick, want = {}, {}
+        for r in recs:
+            took = []
+            for b, sid, lo, hi in sorted(hits.get(r, []), key=lambda h: -h[0]):
+                if any(sid == t[0] and lo <= t[2] and t[1] <= hi for t in took): continue
+                took.append((sid, lo, hi))
+                if len(took) == a.seed_copies: break
+            pick[r] = took
+            for sid, lo, hi in took: want.setdefault(sid, []).append((lo, hi))
+        # the sample's windows are named <sequence>_<0-based start>; the whole genome is a symlink to it
+        whole = os.path.islink(self.path('depth_sample.fa'))
+        def where(sid, lo, hi):
+            m = None if whole else re.match(r'^(.*)_(\d+)$', sid)
+            return f'{m.group(1)}:{int(m.group(2)) + lo}-{int(m.group(2)) + hi}_+' if m else f'{sid}:{lo}-{hi}_+'
+        # a copy with 20 bp either side, named by the range taken (Smitten, 1-based)
+        PAD = 20
+        seqs = {}
+        for name, x in read_fasta(self.path('depth_sample.fa')):
+            for lo, hi in want.get(name, ()):
+                a0, b0 = max(1, lo - PAD), min(len(x), hi + PAD)
+                seqs[(name, lo, hi)] = (where(name, a0, b0), x[a0 - 1:b0])
+        # records without a copy in the sample: the origin element, from the genome
+        lone = {r: re.match(r'^(.*):(\d+)\.\.(\d+)(_[A-Z]+)?$', origin.get(r, '')) for r in recs if not pick[r]}
+        lone = {r: m for r, m in lone.items() if m}
+        if lone:
+            need = {m.group(1) for m in lone.values()}
+            for name, x in read_fasta(self.genome):
+                if name not in need: continue
+                for r, m in lone.items():
+                    if m.group(1) == name:
+                        lo, hi = int(m.group(2)), int(m.group(3))
+                        seqs[(name, lo, hi)] = (f'{name}:{lo}-{hi}_+', x[lo - 1:hi]); pick[r] = [(name, lo, hi)]
+        fixed = bool(a.te_composer) and '--fixed-cons' in subprocess.run([a.te_composer, '--help'], capture_output=True, text=True).stdout
+        if not fixed:
+            self.log('  te-composer has no --fixed-cons (needs >= 0.6.8): one-row seed alignments')
+        lib = dict(read_fasta(self.path('library.fa')))
+        def one(i, r):
+            ident = r.split('#')[0]; out = self.path('seeds', f'{i}.stk')
+            if fixed and pick[r]:
+                cons, inst = self.path('seeds', f'{i}.cons.fa'), self.path('seeds', f'{i}.inst.fa')
+                with open(cons, 'w') as fh: fh.write(f'>{ident}\n{lib[r]}\n')
+                with open(inst, 'w') as fh:
+                    for k in pick[r]:
+                        fh.write('>%s\n%s\n' % seqs[k])
+                with open(self.path('logs', 'seeds.log'), 'a') as lf:
+                    subprocess.run([a.te_composer, '--silent', '--fixed-cons', cons, '--name', ident, '--threads', '1', inst, out],
+                                   stdout=lf, stderr=lf)
+                os.remove(cons); os.remove(inst)
+                if os.path.exists(out) and os.path.getsize(out): return len(pick[r])
+            with open(out, 'w') as fh:   # the record alone
+                fh.write(f'# STOCKHOLM 1.0\n#=GF ID {ident}\n#=GF SQ 1\n{ident} {lib[r]}\n#=GC RF {lib[r]}\n//\n')
+            return 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=a.threads) as ex:
+            rows = list(ex.map(lambda ir: one(*ir), enumerate(recs)))
+        with open(self.path('library.stk'), 'w') as fo:
+            for i in range(len(recs)):
+                with open(self.path('seeds', f'{i}.stk')) as fh: shutil.copyfileobj(fh, fo)
+                os.remove(self.path('seeds', f'{i}.stk'))
+        self.log(f'  {len(recs)} seed alignments: {sum(1 for n in rows if n)} from genome copies ({sum(rows)} rows), '
+                 f'{len(lone)} from the origin element alone, {sum(1 for n in rows if not n)} one-row')
 
     def evidence(self):
         a = self.a
@@ -365,27 +512,30 @@ class Run:
             for k, p, flag in (('ltr-forage', a.ltr_forage, '--version'), ('rmblastn', a.rmblastn, '-version'), ('nail', a.nail, '--version'),
                                ('mmseqs', a.mmseqs, 'version'), ('te-composer', a.te_composer, '--version'), ('sufr', a.sufr, '--version')):
                 if p: fh.write(f'{k}\t{p}\t{tool_version(p, flag)}\n')
-        self.step('index', '0 index (sufr)', self.index)
         self.step('sample', '0 depth sample', self.sample)
-        self.step('ltr-forage', '1-5 ltr-forage', self.ltr_forage)
+        self.step('index', '1 index (sufr)', self.index)
+        self.step('ltr-forage', '1-11 ltr-forage', self.ltr_forage)
         if a.stage_b:
-            self.step('precluster', '5b precluster (raw library)', self.precluster)
-            self.step('premodels', f'5c premodels (consensus for raw clusters >= {a.min_cons})', self.premodels)
-        self.step('depth', '6 depth cleanup' + (' (small clusters + representatives)' if a.stage_b else ''), self.depth)
-        self.step('nested', '7 nested vote', self.nested)
-        self.step('cluster', '8-9 cluster + exemplar', self.cluster)
-        self.step('flank', '9b flank (segmental duplications)', self.flank)
-        self.step('contain', '10 containment', self.contain)
-        self.step('excise', '11 exemplar nested excision', self.excise)
-        self.step('pbs', '12 PBS', self.pbs)
-        self.step('tier', f'13 tier ({a.tier})', self.tier)
-        self.step('models', f'13b models (consensus for clusters >= {a.min_cons})', self.models)
-        self.step('families', '14 families', self.families)
+            self.step('precluster', '12 pre-clustering (raw library)', self.precluster)
+            self.step('premodels', f'13 consensus representatives (raw clusters >= {a.min_cons})', self.premodels)
+        self.step('depth', '14 depth cleanup' + (' (small clusters + representatives)' if a.stage_b else ''), self.depth)
+        self.step('nested', '15 nested-LTR vote', self.nested)
+        self.step('cluster', '16 element clustering + exemplars', self.cluster)
+        self.step('flank', '17 flank filter (segmental duplications)', self.flank)
+        self.step('contain', '18 containment', self.contain)
+        self.step('excise', '19 internal nested excision', self.excise)
+        self.step('pbs', '20 PBS', self.pbs)
+        self.step('tier', f'21 tiering ({a.tier})', self.tier)
+        self.step('models', f'22 consensus models (clusters >= {a.min_cons})', self.models)
+        self.step('mdepth', '22b depth check of the models', self.mdepth)
+        self.step('families', '23 80-80 families', self.families)
+        self.step('seeds', '23b seed alignments', self.seeds)
         nrec = sum(1 for l in open(self.path('library.fa')) if l.startswith('>'))
         nfam = len({l.split('\t')[0] for l in open(self.path('families.tsv'))} - {'family'})
         if a.evidence_page:
-            self.step('evidence', '15 evidence page', self.evidence)
-        self.log(f'done: {nrec} records, {nfam} families ({time.time() - t0:.0f} s)')
+            self.step('evidence', '24 evidence page', self.evidence)
+        m = (time.time() - t0) / 60
+        self.log(f'done: {nrec} records, {nfam} families ({m:.1f} min)')
 
 
 def main():
@@ -394,9 +544,10 @@ def main():
     ap.add_argument('genome')
     ap.add_argument('-o', '--outdir', required=True)
     ap.add_argument('-t', '--threads', type=int, default=os.cpu_count())
-    ap.add_argument('--sufr', dest='sufr_index', help='existing sufr index of the genome (skips step 0; default: '
+    ap.add_argument('--sufr', dest='sufr_index', help='existing sufr index of the genome (skips step 1; default: '
                     '<genome>.sufr beside the genome when it exists, with .fa/.fasta/.fna dropped)')
-    ap.add_argument('--tier', choices=('pbs', 'strict'), default='pbs')
+    ap.add_argument('--tier', choices=('pbs', 'strict', 'all'), default='pbs', help='singleton clusters kept: identity >= 93 or a PBS '
+                    '(pbs), identity >= 90 and a PBS (strict), or every one (all)')
     ap.add_argument('--from', dest='from_step', choices=STEPS, help='rerun from this step on')
     d = ap.add_argument_group('detection')
     d.add_argument('--no-fastan', action='store_true',
@@ -406,6 +557,8 @@ def main():
     d.add_argument('--overlaps', choices=('evidence', 'best'), default='evidence',
                    help='overlapping calls: keep the one with the most evidence after annotation (evidence, default), '
                         'or LTRharvest\'s best seed similarity per overlapping group before re-extension (best; faster)')
+    d.add_argument('--forage-arg', action='append', default=[], metavar='ARG',
+                   help='pass ARG on to ltr-forage (repeatable; write --forage-arg=--option for options)')
     d.add_argument('--mask-bed', metavar='BED', help='also mask these intervals (sequence name, 0-based start, end)')
     g = ap.add_argument_group('depth sample and floors')
     g.add_argument('--sample-above', type=float, default=200, help='sample genomes over this many non-N Mb (200)')
@@ -421,6 +574,14 @@ def main():
                    help='depth-clean and re-cluster every element (the older flow) instead of clustering the raw library '
                         'first and representing clusters >= --min-cons by their consensus (stage B, the default)')
     m.add_argument('--no-flank', action='store_true', help='skip the segmental-duplication flank filter')
+    m.add_argument('--no-model-depth', action='store_true', help='skip step 22b, the depth check of the finished models')
+    m.add_argument('--depth-rounds', type=int, default=3, help='search rounds of the step 14 depth cleanup (3; 0 skips it)')
+    m.add_argument('--early-tier', action='store_true', help="drop raw singletons the tier would reject before step 14")
+    m.add_argument('--seed-copies', type=int, default=50, help='genome copies per seed alignment in library.stk (50)')
+    m.add_argument('--int-copies-max', type=float, default=2000,
+                   help='step 22b drops an internal model with more genome copies than this per element of its cluster (2000; 0: off)')
+    m.add_argument('--model-depth-ratio', type=float, default=5,
+                   help='step 22b cuts an exemplar model where depth is at least this many times its median (5)')
     e = ap.add_argument_group('evidence page')
     e.add_argument('--evidence-page', action='store_true', help='also write evidence.html: one dossier per family')
     e.add_argument('--evidence-reference', metavar='LIB', help='curated library to measure each family against on the page')
@@ -431,7 +592,8 @@ def main():
     t.add_argument('--te-composer', dest='te_composer')
     t.add_argument('--nail')
     t.add_argument('--mmseqs')
-    t.add_argument('--domain-hmm', default=os.environ.get('HMM', '/usr/local/LTR_retriever-2.9.0/database/TEfam.hmm'))
+    t.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(ROOT, 'data', 'TEfam.hmm')),
+                   help="protein profiles for ltr-forage's domain search (default: LTR_retriever's TEfam.hmm, shipped in data/)")
     t.add_argument('--word', type=int, default=12, help='rmblastn seed word for the library all-vs-all (12)')
     a = ap.parse_args()
     if not a.sufr_index:
@@ -447,10 +609,10 @@ def main():
     if v[1:2] == ['3.0.10'] and 'MT_MODE' not in os.environ:
         os.environ['MT_MODE'] = '0'   # 3.0.10's streaming --mt-mode 1 can deadlock (fixed in 3.0.11)
     a.stage_b = not a.stage_a and a.min_cons >= 2   # stage B needs consensus representatives
-    if a.min_cons > 0:
-        a.te_composer = find_tool(a.te_composer, 'TE_COMPOSER', 'te-composer',
-                                  [os.path.join(ROOT, '..', '..', 'dfam-curator', 'target', 'release', 'te-composer')],
-                                  min_version=(0, 6, 6))
+    # consensus models (step 22) and the seed alignments (step 23b)
+    a.te_composer = find_tool(a.te_composer, 'TE_COMPOSER', 'te-composer',
+                              [os.path.join(ROOT, '..', '..', 'dfam-curator', 'target', 'release', 'te-composer')],
+                              min_version=(0, 6, 6))
     if not a.sufr_index:
         a.sufr = find_tool(a.sufr, 'SUFR', 'sufr', [os.path.join(ROOT, '..', 'sufr', 'target', 'release', 'sufr')])
     if not os.path.isfile(a.domain_hmm):
