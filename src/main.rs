@@ -157,6 +157,20 @@ struct Args {
     #[arg(long, default_value_t = 100, value_name = "BP")]
     reextend_vicinity: usize,
 
+    /// Re-extend with a window of this many bp first (0: off).  A
+    /// candidate is searched again with the full --reextend-ltr-max window
+    /// only when the first alignment fails or ends within
+    /// --reextend-first-margin of the window edge with both LTRs below
+    /// --tandem-max self-repeat; satellite pairs that run to the edge are
+    /// vetoed on the short window's LTRs (see the README)
+    #[arg(long, default_value_t = 2500, value_name = "BP")]
+    reextend_first: usize,
+
+    /// With --reextend-first: a first-pass alignment ending within this many
+    /// bp of a window edge is searched again with the full window
+    #[arg(long, default_value_t = 500, value_name = "BP")]
+    reextend_first_margin: usize,
+
     /// Terminal alignment window that must be clean for an end to stand (columns)
     #[arg(long, default_value_t = 6, value_name = "N")]
     trim_window: usize,
@@ -752,7 +766,13 @@ where
             vicinity: args.reextend_vicinity,
             trim_window: args.trim_window,
             trim_matches: args.trim_matches,
+            edge_margin: 5,
         };
+        // a first-pass alignment that stops short of the edge may still be cut by it (X-drop and trim pull
+        // the end back from where the window ends), so 'at the edge' gets a wide margin there
+        let cfg1 = reextend::ReextendConfig { ltr_max: args.reextend_first, edge_margin: args.reextend_first_margin, ..cfg.clone() };
+        let two_pass = args.reextend_first > 0 && args.reextend_first < args.reextend_ltr_max;
+        let n_second = std::sync::atomic::AtomicUsize::new(0);
         let out: Vec<Option<reextend::Reextended>> = surviving
             .par_iter()
             .map(|(c, ti)| {
@@ -761,12 +781,42 @@ where
                     .get(c.seq_num + 1)
                     .map(|&s| s - 1)
                     .unwrap_or(text.len() - 1);
-                reextend::reextend(
-                    &aligner, &cfg, &text, seq_start, seq_end,
+                let run = |cf: &reextend::ReextendConfig| reextend::reextend(
+                    &aligner, cf, &text, seq_start, seq_end,
                     ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end,
-                )
+                );
+                if !two_pass {
+                    return run(&cfg);
+                }
+                // Short window first.  An alignment that ends inside it stands; one that runs to the
+                // edge is a long LTR or a satellite array.  Arrays are vetoed by 8a on these LTRs
+                // (their self-repeat coverage is kept for it); everything else gets the full window.
+                match run(&cfg1) {
+                    Some(r) if !r.at_window_edge => Some(r),
+                    Some(mut r) => {
+                        let a = reextend::self_repeat_cov(&aligner, &text[r.left_ltr_start..=r.left_ltr_end]);
+                        let b = reextend::self_repeat_cov(&aligner, &text[r.right_ltr_start..=r.right_ltr_end]);
+                        if a.max(b) >= args.tandem_max {
+                            r.self_cov = Some((a, b));
+                            Some(r)
+                        } else {
+                            n_second.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            run(&cfg)
+                        }
+                    }
+                    None => {
+                        n_second.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        run(&cfg)
+                    }
+                }
             })
             .collect();
+        if two_pass {
+            eprintln!(
+                "[6 re-extension] {} bp window first; {} candidate(s) searched again with {} bp",
+                args.reextend_first, n_second.into_inner(), args.reextend_ltr_max,
+            );
+        }
         let n_ok = out.iter().filter(|r| r.is_some()).count();
         let n_edge = out.iter().filter(|r| r.as_ref().map_or(false, |x| x.at_window_edge)).count();
         let n_moved = out
@@ -851,7 +901,12 @@ where
         let aligner = reextend::Aligner::new()?;
         final_coords
             .par_iter()
-            .map(|&(l1s, l1e, l2s, l2e)| {
+            .zip(reext.par_iter())
+            .map(|(&(l1s, l1e, l2s, l2e), re)| {
+                // computed in step 6 for the same LTRs when the short window ran to its edge
+                if let Some(c) = re.as_ref().and_then(|r| r.self_cov) {
+                    return c;
+                }
                 (reextend::self_repeat_cov(&aligner, &text[l1s..=l1e]), reextend::self_repeat_cov(&aligner, &text[l2s..=l2e]))
             })
             .collect()
@@ -1171,8 +1226,10 @@ fn print_gt(
         } else { String::new() },
         format!("{:?}", st.overlaps).to_lowercase(),
         if args.ltrharvest { String::new() } else {
-            format!(" -reextend {} -reextend-vicinity {} -trim {}/{}",
-                args.reextend_ltr_max, args.reextend_vicinity, args.trim_matches, args.trim_window)
+            format!(" -reextend {}{} -reextend-vicinity {} -trim {}/{}",
+                args.reextend_ltr_max,
+                if args.reextend_first > 0 { format!(" -reextend-first {}", args.reextend_first) } else { String::new() },
+                args.reextend_vicinity, args.trim_matches, args.trim_window)
         },
     );
     println!("# predictions are reported in the following way");

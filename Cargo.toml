@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 libsufr = { path = "../sufr/libsufr" }
-rmblast-lib = { git = "https://github.com/Dfam-consortium/RMBlast.git", tag = "3.0.10" }
+rmblast-lib = { git = "https://github.com/Dfam-consortium/RMBlast.git", tag = "3.0.12" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 rayon = "1"

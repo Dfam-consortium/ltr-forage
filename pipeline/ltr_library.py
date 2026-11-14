@@ -14,7 +14,11 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continu
                  intervals of one's own.  TSD and TG..CA are evidence at the final boundaries (the TSD
                  search does not move the ends, as LTRharvest's does).  Calls whose re-extended ends agree
                  within 20 bp are merged, and overlapping calls are resolved by --overlaps
-  12  precluster element clusters of the raw library (all-vs-all, as step 16)
+  12  precluster element clusters of the raw library (all-vs-all, as step 16).  A probe of 150 records of
+                 each kind projects the all-vs-all hits first; above --greedy-above million (about 1.5-2.5 min
+                 per million: mm10 45 M, 60-110 min; maize 2,365 M) the clustering is greedy instead
+                 (greedy_cluster.py): batches of --greedy-batch elements all-vs-all, the rest searched
+                 against at most --greedy-reps members per cluster
   13  premodels  te-composer consensus for raw clusters of >= --min-cons elements; from here on
                  each big cluster is represented by its consensus, and steps 14-16 work on the elements of
                  smaller clusters plus those representatives (the members of a big cluster join the
@@ -22,6 +26,8 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continu
                  --stage-a (or --min-cons < 2) skips them and steps 14-16 work on every element
   14  depth      three rounds: rmblastn of the sample against the library, excise stretches far
                  above their record's own genome depth (nested passengers), drop high-depth LTRs.
+                 Only the first round is a search: later rounds apply the last round's cuts to its
+                 alignments (--no-depth-remap searches the cut records again instead).
                  A representative is cut only at 10x its own depth and never dropped: a big family's
                  consensus is high-copy itself, while a real insertion stands far above it
   15  nested     first element clustering (library all-vs-all), nested LTR excision by vote
@@ -45,10 +51,16 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continu
                  so a non-LTR passenger shared by many records splits its sample copies among them and
                  each sees a low depth; a consensus model can also take back a passenger its founder
                  lost (mm10: L1 and B1/B2 pieces in five models masked 191 Mb outside annotated LTRs).
-                 --no-model-depth skips it.  An internal model with more than --int-copies-max genome
-                 copies per element of its cluster is dropped: internals are never solo, so it is mostly
-                 another repeat (mm10 --early-tier: an L1 exemplar internal, 5,999 per element, 133 Mb
-                 outside the curated LTRs; at most 707 for any other model in six genomes)
+                 --no-model-depth skips it.  With --early-tier, an internal model with more than
+                 --int-copies-max (2000) genome copies per element of its cluster is dropped: internals
+                 are never solo, so it is mostly another repeat (mm10 --early-tier: an L1 exemplar
+                 internal, 5,999 per element, 133 Mb outside the curated LTRs).  Without --early-tier the
+                 check is off unless the option is given: it changed none of the six tuning genomes'
+                 default runs.  The depth
+                 search is then repeated on the cut models: an LTR model whose median depth rose
+                 --depth-jump-fold (20) and whose element has neither a TSD nor TG..CA ends took over a
+                 cut segment's copies and is dropped (mm10: two LTR models of L1 sequence, 101x and 60x,
+                 44 Mb outside the curated LTRs; zebra finch fam0093, 170x with TSD and TG..CA, is real)
   23  families   80-80 families (LTRs and internals both), gap-aware, Gypsy/Copia class names
  23b  seeds      library.stk, a seed alignment for every record: its best --seed-copies non-overlapping
                  copies in the depth sample (the record's origin element when the sample has none),
@@ -71,7 +83,7 @@ an artifact mechanism, not lower novelty.
 External programs: ltr-forage, sufr, rmblastn (Rust), te-composer (dfam-curator >= 0.6.6), and nail
 (>= 0.7.1) with MMseqs2 for ltr-forage's domain search, found from the options, the environment (LTRFORAGE,
 SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy."""
-import argparse, concurrent.futures, os, random, re, shutil, subprocess, sys, time
+import argparse, concurrent.futures, glob, os, random, re, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # through symlinks (an LTR_FORAGE_DIR of links)
 ROOT = os.path.dirname(HERE)
@@ -273,8 +285,18 @@ class Run:
 
     def precluster(self):
         if not self.a.stage_b: return
-        self.search('lib.fa', 'lib.fa', 5, 'raw_ava.tsv', AVA, 'precluster.log', clustering=True)
-        self.py('step4.py', 'raw_ava.tsv', 'raw_ava.tsv', 'elem/clusters_raw.json', log='precluster.log', stdout='elem/raw.txt')
+        a = self.a
+        if a.greedy_above >= 0:
+            self.py('greedy_cluster.py', 'probe', 'lib.fa', '--work', 'greedy_probe', log='precluster.log', stdout='elem/probe.txt')
+            proj = float(re.search(r'projected all-vs-all hits: ([0-9.]+) M', open(self.path('elem', 'probe.txt')).read()).group(1))
+            self.log(f'  probe: {proj:.1f} M all-vs-all hits projected')
+        if a.greedy_above >= 0 and proj > a.greedy_above:
+            self.log(f'  greedy clustering (above {a.greedy_above:g} M): batches of {a.greedy_batch}, at most {a.greedy_reps} representatives per cluster')
+            self.py('greedy_cluster.py', 'cluster', 'lib.fa', 'elem/clusters_raw.json', '--batch', a.greedy_batch,
+                    '--reps', a.greedy_reps, '--work', 'greedy_work', log='precluster.log', stdout='elem/raw.txt')
+        else:
+            self.search('lib.fa', 'lib.fa', 5, 'raw_ava.tsv', AVA, 'precluster.log', clustering=True)
+            self.py('step4.py', 'raw_ava.tsv', 'raw_ava.tsv', 'elem/clusters_raw.json', log='precluster.log', stdout='elem/raw.txt')
         self.py('exemplar_lib.py', 'elem/clusters_raw.json', 'lib.fa', 'exemplar_raw.fa', log='precluster.log')
         self.log('  ' + open(self.path('elem', 'raw.txt')).read().strip().split('\n')[-1])
 
@@ -298,11 +320,15 @@ class Run:
                              capture_output=True, text=True, check=True).stdout.strip()
         # one single-thread batch per thread (was 16 batches of threads // 16: at -t 24, 8 cores idle); every sample
         # sequence is searched on its own, so the hits do not depend on the batching
-        self.env['BATCHES'] = str(self.a.threads)
+        self.env['BATCHES'] = str(self.a.threads); self.env['DEPTH_WORD'] = str(self.a.depth_word)
+        # rounds after the first apply the last round's cuts to its hits instead of searching again (--no-depth-remap)
+        self.env['REMAP'] = '0' if self.a.no_depth_remap else '1'
         self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'depth_lib.fa' if self.a.stage_b else 'lib.fa', 'depth_sample.fa', 'clean', self.a.depth_rounds, p['scale'], mtx,
                  '--ratio', 3, '--min-depth', p['min_depth'], '--min-len', 50, '--abs-depth', p['abs_depth'], '--drop-frac', 0.7,
                  *(['--consensus', 'reps.fa'] if self.a.stage_b else [])],
                 'depth.log', threads=1)
+        del self.env['REMAP']
+        self.drop_raw_hits('clean')
         if self.a.stage_b:
             # representatives stay in the search (so hits compete for the sample as in stage A) and take its
             # excisions, but one that depth cleanup dropped outright comes back as its consensus: a big family's
@@ -343,7 +369,23 @@ class Run:
             return
         here = os.path.join(HERE, 'flank_filter.py')
         self.sh([sys.executable, here, 'write', 'elem/clusters_nested.json', self.genome, 'flanks.fa'], 'flank.log')
-        self.search('flanks.fa', 'flanks.fa', 5, 'flanks.tsv', AVA, 'flank.log')
+        # within-cluster searches only (flank_filter.py bins); the matrix is the one a single search would pick
+        bd = self.path('flank_bins')
+        if os.path.isdir(bd): shutil.rmtree(bd)
+        self.sh([sys.executable, here, 'bins', 'elem/clusters_nested.json', 'flanks.fa', 'flank_bins'], 'flank.log')
+        env = dict(self.env)
+        try:
+            self.env['MIN_PID'] = '80'
+            self.env['MATRIX'] = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), 'flanks.fa'], cwd=self.out,
+                                                capture_output=True, text=True, check=True).stdout.strip()
+            with open(self.path('flanks.tsv'), 'w') as fo:
+                for f in sorted(os.listdir(bd)):
+                    if not f.endswith('.fa'): continue
+                    b = os.path.join('flank_bins', f)
+                    self.sh(['bash', os.path.join(HERE, 'rmb_ava.sh'), b, b, 5, b[:-3] + '.tsv', *AVA], 'flank.log')
+                    with open(self.path(b[:-3] + '.tsv')) as fh: shutil.copyfileobj(fh, fo)
+        finally: self.env = env
+        shutil.rmtree(bd)
         self.sh([sys.executable, here, 'score', 'elem/clusters_nested.json', 'flanks.tsv', 'sd_clusters.tsv'], 'flank.log',
                 stdout='flank.txt')
         self.log('  ' + open(self.path('flank.txt')).read().strip())
@@ -382,9 +424,18 @@ class Run:
                  '--jobs', max(1, a.threads // 2), '--te-composer', a.te_composer, '--work', 'cons',
                  *(['--premade', 'reps.fa'] if a.stage_b else [])], 'models.log', stdout='models.txt')
 
+    def drop_raw_hits(self, *dirs):
+        """The unfiltered hits of a finished depth step (gigabytes: every sample locus against every record it matches)."""
+        for d in dirs:
+            for f in glob.glob(self.path(d, 'batches', 'raw*.tsv')): os.remove(f)
+
     def mdepth(self):
         if self.a.no_model_depth:
             shutil.copy(self.path('models.nodepth.fa'), self.path('models.fa')); return
+        self.mdepth_passes()
+        self.drop_raw_hits('mclean', 'mclean2', 'mclean3')
+
+    def mdepth_passes(self):
         p = self.params()
         mtx = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), 'depth_sample.fa'], cwd=self.out,
                              capture_output=True, text=True, check=True).stdout.strip()
@@ -395,7 +446,7 @@ class Run:
             for n, s in read_fasta(self.path('models.nodepth.fa')):
                 k = n.split('#')[0]
                 if k in reps or core.get(n, '').upper() != s.upper(): fh.write(f'>{k}\n{s}\n')
-        self.env['BATCHES'] = str(self.a.threads)
+        self.env['BATCHES'] = str(self.a.threads); self.env['DEPTH_WORD'] = str(self.a.depth_word)
         self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'models.nodepth.fa', 'depth_sample.fa', 'mclean', 1, p['scale'],
                  mtx, '--ratio', self.a.model_depth_ratio, '--min-depth', p['min_depth'], '--min-len', 50, '--consensus', 'models.cons.fa'],
                 'mdepth.log', threads=1)
@@ -405,6 +456,39 @@ class Run:
             self.py('int_copies.py', 'models.fa', 'mclean/depth1.tsv', 'elem/clusters_nested.json', p['scale'],
                     self.a.int_copies_max, 'int_copies.tsv', log='mdepth.log', stdout='int_copies.txt')
             self.log('  ' + open(self.path('int_copies.txt')).read().strip())
+        if self.a.depth_jump_fold:
+            # the trimmed models differ from the first search's in a few records: only those are searched again
+            self.env['PREV_RUN'] = 'mclean'
+            self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'models.fa', 'depth_sample.fa', 'mclean2', 1, p['scale'],
+                     mtx, '--ratio', self.a.model_depth_ratio, '--min-depth', p['min_depth'], '--min-len', 50, '--consensus', 'models.cons.fa'],
+                    'mdepth.log', threads=1)
+            del self.env['PREV_RUN']
+            self.py('depth_jump.py', 'models.fa', 'mclean/depth1.tsv', 'mclean2/depth1.tsv', 'cand.tsv', self.a.depth_jump_fold,
+                    p['min_depth'], 'depth_jump.tsv', log='mdepth.log', stdout='depth_jump.txt')
+            self.log('  ' + open(self.path('depth_jump.txt')).read().strip())
+            if sum(1 for _ in open(self.path('depth_jump.tsv'))) > 1:
+                # A dropped model's copies go to whichever model matches them next, as a cut segment's do.  A third depth
+                # pass without the dropped models (no search: their hits leave the second pass's unfiltered hits and
+                # the mask-level filter runs again); a model it cuts differently from the second pass, which still had
+                # them, takes the third pass's cuts.  (mm10: an internal's L1 piece, depth 38 beside the two dropped
+                # L1 models and 7,447 without them, otherwise masked 5.2 Mb outside the curated LTRs)
+                self.env['PREV_RUN'] = 'mclean2'
+                self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'models.fa', 'depth_sample.fa', 'mclean3', 1, p['scale'],
+                         mtx, '--ratio', self.a.model_depth_ratio, '--min-depth', p['min_depth'], '--min-len', 50, '--consensus', 'models.cons.fa'],
+                        'mdepth.log', threads=1)
+                del self.env['PREV_RUN']
+                second = {n.split('#')[0]: s for n, s in read_fasta(self.path('mclean2', 'round1.fa'))}
+                third = {n.split('#')[0]: s for n, s in read_fasta(self.path('mclean3', 'round1.fa'))}
+                recs = list(read_fasta(self.path('models.fa'))); n = bp = gone = 0
+                with open(self.path('models.fa'), 'w') as fh:
+                    for name, s in recs:
+                        k = name.split('#')[0]
+                        if second.get(k) != third.get(k):
+                            t = third.get(k)
+                            if t is None: gone += 1; bp += len(s); continue
+                            if t != s: n += 1; bp += len(s) - len(t); s = t
+                        fh.write(f'>{name}\n{s}\n')
+                self.log(f'  {n} model(s) trimmed where the dropped models\' copies went, {bp:,} bases removed, {gone} dropped')
 
     def families(self):
         self.search('models.fa', 'models.fa', 5, 'core_ava.tsv', AVA, 'families.log', by_kind=True)
@@ -573,13 +657,26 @@ def main():
     m.add_argument('--stage-a', action='store_true',
                    help='depth-clean and re-cluster every element (the older flow) instead of clustering the raw library '
                         'first and representing clusters >= --min-cons by their consensus (stage B, the default)')
+    m.add_argument('--greedy-above', type=float, default=100,
+                   help='step 12 clusters greedily when the probe projects more than this many million all-vs-all hits '
+                        '(100; 0: always greedy; -1: never, and no probe)')
+    m.add_argument('--greedy-batch', type=int, default=2000, help='elements per all-vs-all batch of greedy step 12 (2000)')
+    m.add_argument('--greedy-reps', type=int, default=100, help='representatives per cluster in greedy step 12 (100)')
     m.add_argument('--no-flank', action='store_true', help='skip the segmental-duplication flank filter')
     m.add_argument('--no-model-depth', action='store_true', help='skip step 22b, the depth check of the finished models')
-    m.add_argument('--depth-rounds', type=int, default=3, help='search rounds of the step 14 depth cleanup (3; 0 skips it)')
+    m.add_argument('--depth-rounds', type=int, default=3, help='rounds of the step 14 depth cleanup (3; 0 skips it)')
+    m.add_argument('--no-depth-remap', action='store_true',
+                   help='search the cut records again in step 14 rounds after the first.  By default those rounds search '
+                        'nothing: the last round\'s cuts are applied to its hits (alignments clipped, rescored, joined '
+                        'across a cut), which is close to the searched rounds but not identical')
+    m.add_argument('--depth-word', type=int, default=9, help='rmblastn seed word size of the step 14 and 22b depth searches (9, as RepeatMasker)')
     m.add_argument('--early-tier', action='store_true', help="drop raw singletons the tier would reject before step 14")
     m.add_argument('--seed-copies', type=int, default=50, help='genome copies per seed alignment in library.stk (50)')
-    m.add_argument('--int-copies-max', type=float, default=2000,
-                   help='step 22b drops an internal model with more genome copies than this per element of its cluster (2000; 0: off)')
+    m.add_argument('--int-copies-max', type=float,
+                   help='step 22b drops an internal model with more genome copies than this per element of its cluster '
+                        '(2000 with --early-tier, otherwise off; 0: off)')
+    m.add_argument('--depth-jump-fold', type=float, default=20,
+                   help='step 22b drops an LTR model without TSD or TG..CA whose depth rose this many times after the cuts (20; 0: off)')
     m.add_argument('--model-depth-ratio', type=float, default=5,
                    help='step 22b cuts an exemplar model where depth is at least this many times its median (5)')
     e = ap.add_argument_group('evidence page')
@@ -594,8 +691,10 @@ def main():
     t.add_argument('--mmseqs')
     t.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(ROOT, 'data', 'TEfam.hmm')),
                    help="protein profiles for ltr-forage's domain search (default: LTR_retriever's TEfam.hmm, shipped in data/)")
-    t.add_argument('--word', type=int, default=12, help='rmblastn seed word for the library all-vs-all (12)')
+    t.add_argument('--word', type=int, default=16, help='rmblastn seed word for the library all-vs-all (16; 12 gave the same '
+                   'scores within 0.05 points on rice, lotus and mouse, with step 12 up to 2x slower)')
     a = ap.parse_args()
+    if a.int_copies_max is None: a.int_copies_max = 2000 if a.early_tier else 0
     if not a.sufr_index:
         idx = re.sub(r'\.(fa|fasta|fna)(\.gz)?$', '', a.genome) + '.sufr'
         if os.path.isfile(idx): a.sufr_index = idx

@@ -22,6 +22,7 @@ ap.add_argument('--profile', action='store_true', help='mask is a depth TSV (rec
 ap.add_argument('--consensus', help='fasta of consensus records (stage B representatives): cut only runs at --consensus-ratio '
                 'times their median depth, never by --abs-depth or --drop-frac; a big family\'s consensus is high-copy itself')
 ap.add_argument('--consensus-ratio', type=float, default=10)
+ap.add_argument('--cuts', help='write the changes here: record<TAB>drop, or record<TAB>i-j,i-j,... (0-based half-open runs cut out)')
 a = ap.parse_args()
 a.min_depth = a.min_depth * a.scale; a.abs_depth = a.abs_depth * a.scale
 seqs = {}; order = []; name = None
@@ -47,6 +48,7 @@ for line in ([] if a.profile else open(a.mask)):
     rs = max(1, min(rs, L)); re_ = max(1, min(re_, L))
     if rs > re_: rs, re_ = re_, rs
     d[rs] += 1; d[re_ + 1] -= 1
+cuts = open(a.cuts, 'w') if a.cuts else None
 out = open(a.out, 'w'); trimmed = 0; removed = 0; dropped = 0; profile = {}
 for k in order:
     s = seqs[k]; L = len(s); d = depth[k]; prof = []; run = 0
@@ -70,13 +72,20 @@ for k in order:
         else: i += 1
     total = sum(j - i for i, j in runs)
     if runs and a.drop_frac > 0 and total > a.drop_frac * L and not rep:
-        dropped += 1; continue
+        dropped += 1
+        if cuts: cuts.write(f'{k}\tdrop\n')
+        continue
     if runs and total <= a.max_frac * L:
         keep = []; pos = 0
         for i, j in runs: keep.append(s[pos:i]); pos = j
         keep.append(s[pos:]); new = ''.join(keep); trimmed += 1; removed += total
-    else: new = s
-    if len(new) < a.min_len: dropped += 1; continue
+        cut = True
+    else: new = s; cut = False
+    if len(new) < a.min_len:
+        dropped += 1
+        if cuts: cuts.write(f'{k}\tdrop\n')
+        continue
+    if cut and cuts: cuts.write(k + '\t' + ','.join(f'{i}-{j}' for i, j in runs) + '\n')
     out.write(f'>{k}\n{new}\n')
 out.close()
 print(f'{trimmed} records trimmed, {removed:,} bases removed, {dropped} dropped', file=sys.stderr)

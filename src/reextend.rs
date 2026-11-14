@@ -43,6 +43,9 @@ pub struct ReextendConfig {
     pub trim_window: usize,
     /// Matches required inside that window.
     pub trim_matches: usize,
+    /// An HSP ending within this many bases of a window edge (that is not a
+    /// sequence boundary) counts as reaching it.
+    pub edge_margin: usize,
 }
 
 /// A scoring scheme and search parameters shared by every candidate.
@@ -109,6 +112,9 @@ pub struct Reextended {
     /// sequence boundary.  The LTR may be longer than the window allowed, or
     /// the pair sits inside a larger duplication.
     pub at_window_edge: bool,
+    /// Self-repeat coverage of the two LTRs (`self_repeat_cov`), when the
+    /// two-pass re-extension already computed it.
+    pub self_cov: Option<(f64, f64)>,
 }
 
 /// Bases dropped from each end of an alignment so that its terminal
@@ -266,7 +272,7 @@ pub fn reextend(
         return None;
     }
 
-    let edge = 5usize;
+    let edge = cfg.edge_margin;
     let q_len = qe - qs + 1;
     let s_len = se - ss + 1;
     let at_window_edge = (q_start <= edge && qs > seq_start)
@@ -284,6 +290,7 @@ pub fn reextend(
         columns,
         trimmed: (ql, sl, qr, sr),
         at_window_edge,
+        self_cov: None,
     })
 }
 

@@ -393,6 +393,28 @@ lotus; 2,500 is enough for the vertebrates and Arabidopsis above, and much
 faster on assemblies rich in tandem arrays.  Set it from the longest LTR you expect, not
 from the median.
 
+#### Two-pass window (`--reextend-first`)
+
+By default each candidate is aligned with a 2,500 bp window first
+(`--reextend-first`), which costs a fraction of the full window's
+alignment.  The result stands unless it ends within
+`--reextend-first-margin` (500) bases of a window edge, or no alignment
+qualifies.  Of those, a candidate with an LTR at least `--tandem-max`
+self-repeat is a satellite array running to the edge: it keeps the short
+window's LTRs, and step 8a vetoes it on them without aligning a 7 kb
+array against itself.  Every other one is aligned again with the full
+`--reextend-ltr-max` window, so long LTRs keep their full length.
+
+The two passes are not identical to one full-window pass: a short window
+occasionally holds a different best alignment, even well inside it.
+
+| Genome | Candidate detection (8 threads) | Kept elements | Library sens. / prec. |
+|---|---|---|---|
+| Rice | 9.8 -> 6.9 min | 4,339 -> 4,340 (4 lost, 5 gained) | 93.44 / 98.43 -> 93.43 / 98.43 |
+| Gorilla | 103 -> 45 min | 2,142 -> 2,144 (none lost) | 36.78 / 97.96 either way |
+
+`--reextend-first 0` gives the single full-window pass.
+
 ### 7. Near-duplicate merge (not in LTRharvest)
 
 Seeds of one element stop their X-drop runs a few to hundreds of bases
@@ -888,6 +910,10 @@ Re-extension and near duplicates (steps 6, 7):
       --reextend-ltr-max <BP>   Longest LTR the alignment window reaches beyond each X-drop
                             end [default: 7000]
       --reextend-vicinity <BP>  Extra window beyond that on the outer side of each LTR [default: 100]
+      --reextend-first <BP>     Re-extend with this window first, the full one only near its
+                            edge; 0 disables [default: 2500]
+      --reextend-first-margin <BP>  A first-pass end within BP of the window edge counts as
+                            reaching it [default: 500]
       --trim-window <N>     Terminal alignment columns that must be clean for an end to stand [default: 6]
       --trim-matches <N>    Matches required inside that terminal window [default: 6]
       --dedup-tol <BP>      Merge candidates whose final outer ends both lie within BP of a
@@ -1094,7 +1120,15 @@ figure.
 12. **Pre-clustering.**  The raw library is clustered all-vs-all with
     rmblastn, LTRs against LTRs and internals against internals (the
     clustering reads only same-kind hits of 80% identity or more, and drops
-    the rest as they are written).
+    the rest as they are written).  A probe of 150 records of each kind first
+    projects the hits of that search.  Above `--greedy-above` million (100)
+    the clustering is greedy instead: batches of `--greedy-batch` (2,000)
+    elements are clustered all-vs-all, and the remaining elements are searched
+    against at most `--greedy-reps` (100) members of each cluster, by the same
+    linking rules.  None of the six tuning genomes reaches 100 million (mouse
+    projects 45); maize projects 2,365.  The searches seed with 16-base
+    words (`--word`); 12 gave the same scores within 0.05 points on rice,
+    lotus and mouse, and took this step 1.3-2x as long.
 13. **Consensus representatives.**  Each cluster of at least `--min-cons`
     (3) elements is represented from here on by a te-composer consensus,
     which drops alignment columns held by fewer than half the median number
@@ -1105,14 +1139,30 @@ figure.
     depends on, and the consensus matches the full one to within 31 bases
     on mm10's 22 such clusters.  A 2,006-copy mm10 internal cluster took
     107 minutes, and now 40 s.
-14. **Depth cleanup.**  Three rounds (`--depth-rounds`) of rmblastn search
-    of the sample against the library, one single-thread batch per thread.  Stretches far
+14. **Depth cleanup.**  Three rounds (`--depth-rounds`) of sample depth
+    over the library, from an rmblastn search of the sample against it, one
+    single-thread batch per thread.  Stretches far
     above their record's own depth are excised as nested passengers: 3x for
     an element, 10x for a consensus representative, whose family is
     high-copy itself.  High-copy LTRs are dropped, but never a consensus
     representative.  The search uses mask level 80, so a passenger that
     many records share splits its genome copies among them, and each record
-    may see too little depth to cut it (step 22b catches these).
+    may see too little depth to cut it (step 22b catches these).  Only
+    the first round is a search, run without the mask-level filter and
+    keeping each hit's alignment.  A later round applies the previous
+    round's cuts to those hits (`masklevel.py remap`): a hit on a dropped
+    record goes; a hit on a cut record keeps the alignment columns outside
+    the cuts, rescored as rmblastn scores them, with each cut end trimmed
+    or extended across the junction; two pieces either side of a cut are
+    joined when they are collinear in the genome (a copy without the
+    passenger).  rmblastn's cross-record mask-level filter is then rebuilt
+    over the moved hits.  This is close to searching the cut records again
+    but not identical (see [Accuracy](#accuracy)); `--no-depth-remap`
+    searches the records the previous round trimmed instead, which gives
+    the same cuts as three full searches (identical libraries on rice,
+    lotus and mouse).  Step 22b's second depth search reuses the first
+    one's hits in that exact way.  The unfiltered hits (gigabytes) are
+    deleted when steps 14 and 22b finish.
 15. **Nested-LTR vote.**  A first element clustering excises LTRs nested in
     internals by vote.
 16. **Element clustering.**  Clusters and one exemplar per cluster; each big
@@ -1120,7 +1170,10 @@ figure.
 17. **Flank filter.**  A cluster is dropped when most of its pairs, or
     every one of its copies, share both flanks (300 bp at 80% identity)
     with another copy: the copies are one duplicated locus, not independent
-    insertions (`--no-flank` skips this).
+    insertions (`--no-flank` skips this).  Only pairs within a cluster
+    count, so the flanks are searched in bins of whole clusters rather
+    than all against all: the same calls on seven genomes, and maize's
+    search falls from 689 to 48 minutes (44 GB of hits to 1 GB).
 18. **Containment.**  Exemplars contained in another at 90% or more are
     dropped.
 19. **Internal nested excision.**  Two rounds of nested-LTR removal from
@@ -1136,7 +1189,7 @@ figure.
     most 150 sampled copies, as in step 13).
 22b. **Model depth check.**  One more depth round on the finished models:
     a consensus model is cut where its depth reaches 10x its median, an
-    exemplar at 5x (`--model-depth-ratio`); no model is dropped
+    exemplar at 5x (`--model-depth-ratio`); the cuts drop no model
     (`--no-model-depth` skips the step).  It removes passengers step 14
     left shared among many records, and passengers a consensus took back
     from copies its founder had lost them from: on mm10, L1 and B1/B2
@@ -1144,14 +1197,30 @@ figure.
     On Arabidopsis it cuts a complete 2 kb ATGP2N solo LTR (39x the
     model's depth) out of an ATCopia76 internal.  At 3x it also cut
     conserved stretches of old, 30%-diverged Gypsy families at 3–4x, with
-    no gain in precision anywhere.  The same search drops an internal model
-    whose genome copies exceed 2,000 per element of its cluster
-    (`--int-copies-max`; 0 turns it off).  Internals are never solo, so
-    such a model is mostly another repeat: with `--early-tier`, an mm10
-    exemplar internal of L1 sequence had 5,999 copies per element and
-    masked 133 Mb outside the curated LTRs.  No other model in the six
-    genomes' default runs went above 707, so the check changes none of
-    them.
+    no gain in precision anywhere.  With `--early-tier`, the same search
+    drops an internal model whose genome copies exceed 2,000 per element
+    of its cluster (`--int-copies-max`; 0 turns it off).  Internals are
+    never solo, so such a model is mostly another repeat: with
+    `--early-tier`, an mm10 exemplar internal of L1 sequence had 5,999
+    copies per element and masked 133 Mb outside the curated LTRs.
+    Without `--early-tier` the check is off unless `--int-copies-max` is
+    given: no model in the six genomes' default runs went above 707, so it
+    changed none of them there.  The depth search is then repeated on the cut models, because a
+    cut segment's copies go to whichever model matches them next.  An LTR
+    model is dropped when its median depth rises at least 20-fold
+    (`--depth-jump-fold`; 0 turns it off) and its element has neither a TSD
+    nor TG..CA ends.  Depth alone would not do: a real zebra finch LTR nested
+    in another family's internal rose 170-fold, and has both.  On mouse, two
+    LTR models of L1 sequence rose 101- and 60-fold when an internal's L1
+    segment was cut; no model in the other five genomes meets the rule.  A
+    dropped model's copies move on in the same way, so after a drop the
+    depth is taken once more without the dropped models (no search: their
+    hits are removed and the mask-level filter rebuilt, 5 s on mouse), and
+    a model this pass cuts differently from the second takes its cuts.  On
+    mouse an internal's 87-bp L1 piece stood at depth 38 beside the two
+    dropped models and at 7,447 without them; left in, it masked 5.2 Mb
+    outside the curated LTRs (precision 89.51 instead of 92.46).  The
+    second search adds 3 to 16 minutes.
 23. **80–80 families**, LTR and internal models grouped separately (and
     searched separately), with Gypsy and Copia classes from the domain hits.
 23b. **Seed alignments** (`library.stk`): each model's best
@@ -1211,31 +1280,101 @@ pipeline/evidence_page.py out genome.fa -o fp.html --families top-fp:30 \
 Library masking was scored against curated libraries: sensitivity and
 precision over the bases the curated LTR annotation covers.  Recovered
 families are the curated LTR and internal models covered at 80% or more.
-All ltr_library.py rows are runs of the current driver (Arabidopsis, rice,
-mouse and gorilla 2026-10-25; zebra finch and lotus 2026-10-28), rerun
-from ltr-forage on 2026-10-30 without the domain-only identity floor (see
-[Rule ablation](#rule-ablation)); gorilla was unchanged.  Times are from the
-full runs, which the floor barely affects.  Driver
-times are with 16 threads (Arabidopsis, rice, zebra finch, lotus) or 24
-(mouse, gorilla), HiRepEat's with 16.
+All ltr_library.py rows are runs of the current driver with its defaults,
+one genome at a time with 8 threads on a shared machine: steps 1-13 from
+end-to-end runs of 2026-11-11/12 and steps 14 on rerun on 2026-11-13 with
+the remapped depth rounds (times are the two parts added).  HiRepEat's
+times are with 16 threads.
 
 | Genome | Library | Sensitivity | Precision | Recovered LTR / INT | Time |
 |--------|---------|-------------|-----------|---------------------|------|
-| Arabidopsis (TAIR10.1) | ltr_library.py | 91.89% | 95.61% | 120 / 122 | 50 min |
-| Rice (MSU7) | ltr_library.py | 93.44% | 98.43% | 309 / 308 | 85 min |
+| Arabidopsis (TAIR10.1) | ltr_library.py | 91.12% | 95.54% | 120 / 120 | 22 min |
+| Rice (MSU7) | ltr_library.py | 93.38% | 98.43% | 308 / 307 | 69 min |
 | Rice (MSU7) | HiRepEat | 83.10% | 99.61% | 80 / 76 | 19 min |
-| Mouse (mm10) | ltr_library.py | 42.93% | 76.20% | 105 / 41 | 124 min |
+| Mouse (mm10) | ltr_library.py | 42.88% | 92.86% | 106 / 41 | 225 min |
 | Mouse (mm10) | HiRepEat | 24.04% | 65.46% | 61 / 30 | 31 min |
-| Zebra finch (bTaeGut7) | ltr_library.py | 75.21% | 86.71% | 25 / 29 | 59 min |
+| Zebra finch (bTaeGut7) | ltr_library.py | 75.18% | 86.70% | 25 / 29 | 43 min |
 | Zebra finch (bTaeGut7) | HiRepEat | 70.58% | 90.86% | 16 / 27 | 20 min |
-| Lotus (ChineseLotus 1.1) | ltr_library.py | 92.43% | 93.78% | 283 / 298 | 303 min |
-| Gorilla (mGorGor1 v2.1) | ltr_library.py | 36.78% | 97.96% | 2 / 13 | 107 min |
+| Lotus (ChineseLotus 1.1) | ltr_library.py | 92.46% | 94.14% | 287 / 298 | 301 min |
+| Gorilla (mGorGor1 v2.1) | ltr_library.py | 36.90% | 98.00% | 2 / 13 | 179 min |
 | Gorilla (mGorGor1 v2.1) | HiRepEat | 17.68% | 95.97% | 1 / 3 | 72 min |
+
+Step 14's remapped rounds (the default since 2026-11-13) against the same
+runs with rounds 2 and 3 searched (`--no-depth-remap`), which is the
+reference: the remap only saves time.
+
+| Genome | Rounds searched | Rounds remapped | TP | FP | Step 14, min | Whole run, min |
+|---|---|---|---|---|---|---|
+| Arabidopsis | 91.12 / 95.52 | 91.12 / 95.54 | 0 | -1 kb | 18 -> 13 | 27 -> 22 |
+| Rice | 93.38 / 98.43 | 93.38 / 98.43 | +1 kb | -1 kb | 26 -> 20 | 75 -> 69 |
+| Mouse | 42.92 / 92.46 | 42.88 / 92.86 | -154 kb | -683 kb | 146 -> 100 | 271 -> 225 |
+| Zebra finch | 75.18 / 86.71 | 75.18 / 86.70 | +1 kb | +1 kb | 24 -> 14 | 55 -> 43 |
+| Lotus | 92.46 / 93.83 | 92.46 / 94.14 | +3 kb | -695 kb | 100 -> 86 | 315 -> 301 |
+| Gorilla | 36.87 / 97.96 | 36.90 / 98.00 | +101 kb | -35 kb | 110 -> 106 | 183 -> 179 |
+
+Rounds 2 and 3 take 0.2 to 11 minutes remapped against 5 to 52 searched;
+what is left of step 14 is the round 1 search (gorilla's ran on a busier
+machine than its reference).  The precision gained on lotus and mouse is
+not a property of the remap.  Depth over a small record is thin, so one
+hit more or less moves a segment across the 3x rule, and the cut then
+moves that segment's copies to other records:
+
+- **Lotus.**  One internal is a hit deeper in round 2 (51 against 50, at a
+  threshold near 60) and loses 264 bp instead of 50.  About 80 sample loci
+  then go to another internal, whose depth doubles; it is dropped where
+  the searched rounds trim it to a 737-bp model that masks 0.58 Mb outside
+  the curated annotation and 4 kb inside.
+- **Mouse.**  One internal (chrX at 86.61 Mb) comes out 43 bp shorter and
+  masks 0.65 Mb less outside the curated LTRs: the 80-bp segment noted
+  below.  The 154 kb lost inside them is spread over other models (7 of
+  354 models differ in origin, 35 in length).
+
+With the searched rounds the mouse row is the end-to-end run repeated from
+step 22b with the depth pass after the depth-jump drop, which changes no
+other genome (without it: 89.51% precision).
+
+The rows before the runtime changes of 2026-11-10 (incremental depth
+rounds, word 16, two-pass re-extension) were Arabidopsis 91.89 / 95.61,
+rice 93.44 / 98.43, mouse 42.92 / 92.90, zebra finch 75.21 / 86.71, lotus
+92.43 / 93.78 and gorilla 36.78 / 97.96, in 50, 85, 124, 59, 303 and 107
+minutes with 16 threads (24 on mouse and gorilla).  Incremental depth
+rounds give byte-identical libraries.  Word 16 and two-pass re-extension
+are not identical, and were first scored on their own, each run alongside
+the previous code (8 threads each):
+
+| Change | Rice | Lotus | Mouse | Gorilla |
+|---|---|---|---|---|
+| `--word 16` (step 12 on) | 93.40 / 98.43; 72 -> 60 min | 92.46 / 93.83; 539 -> 346 min | 42.93 / 92.90; 248 -> 225 min | |
+| `--reextend-first 2500` | 93.43 / 98.43; detection 9.8 -> 6.9 min | | | 36.78 / 97.96; detection 103 -> 45 min |
+
+Two genomes moved by more than 0.1 points when all three ran together
+(searched rounds):
+
+- **Arabidopsis, sensitivity 91.89 -> 91.12.**  Two-pass re-extension gives
+  one old Gypsy element without a TSD (NC_003070.9 at 14.24 Mb) LTRs of
+  2.9 kb at 79% identity where the full window gave 4.0 and 4.3 kb at 70%.
+  The shorter LTR aligns over its whole length to two other families'
+  internals, so the nested-LTR vote (step 15) cuts 1,450 bp out of each;
+  the longer one aligned over 73% of its length, under the vote's 80%.
+  Those two models lose 210 kb of masking inside the curated annotation,
+  60 kb net of what other models take up.  A third internal keeps 950 bp
+  more; the other 402 records are identical.
+- **Mouse, precision 92.90 -> 92.46.**  Detection reports 113 more
+  candidates, and in round 2 of step 14 one internal's median depth was 4
+  instead of 3, which kept a segment under the 3x rule.  The L1 piece left
+  in it is the one the pass after the depth-jump drop now removes; an
+  80-bp segment of another internal (0.65 Mb outside the curated LTRs)
+  remains with the searched rounds.
+
+On mouse, depth cleanup is the longest step (100 of the 225 minutes, 94 of
+them the round 1 search).
 
 On mouse the library was at 44.29% and 42.13% before the poly-A veto and
 the model depth check: 141 Mb of its false-positive masking was L1 and 46 Mb
-B1/B2 SINEs, now 35 Mb and 0.4 Mb.  Most of the L1 that remains comes from
-two LTR models made of L1 sequence that carry no poly-A tail.  The copy cap
+B1/B2 SINEs, 35 Mb and 0.4 Mb after those two rules.  Most of that L1 came
+from two LTR models made of L1 sequence that carry no poly-A tail; the
+depth-jump check in step 22b drops them, which takes all false-positive
+masking from 45 Mb to 11 Mb (76.20% to 92.90% precision).  The copy cap
 took the mouse run from 266 to 210 minutes; splitting the all-vs-all
 searches by record kind, dropping hits the clustering does not read and
 running the depth search on every thread took it to 124 minutes, with
@@ -1267,6 +1406,8 @@ check whether each one generalizes, every rule was switched off on its own
 on all six genomes, with the rest of the run unchanged (2026-10-29/31, the
 runs in the table above).  The table gives the change in sensitivity /
 precision, in points, with the rule off:
+
+Mouse values in this section predate the depth-jump check.
 
 | Rule off (added for) | Arabidopsis | Zebra finch | Rice | Gorilla | Lotus | Mouse |
 |---|---|---|---|---|---|---|
@@ -1313,9 +1454,33 @@ genome from the changed step:
   that had been part of a 578-element one became its own family, whose
   exemplar internal, mostly L1 sequence, masked 133 Mb outside the curated
   annotation.  Step 22b's internal-copies check now drops that model, and
-  mouse reaches 42.65% / 79.40% (default 42.93% / 76.20%).  It stays off
+  mouse reaches 42.65% / 79.40% (default at the time 42.93% / 76.20%).  It stays off
   by default; it is worth trying on large genomes, where the time matters
   most.
+
+Greedy step 12 was forced on (`--greedy-above 0`, 2026-11-01; Arabidopsis
+with `--greedy-batch 300`, as it has too few elements for 2,000) and each
+genome rerun from step 12 to compare it with the all-vs-all search:
+
+| Sensitivity / precision (families) | Arabidopsis | Zebra finch | Rice | Gorilla | Lotus | Mouse |
+|---|---|---|---|---|---|---|
+| Greedy step 12 | 91.89 / 95.61 (220) | 75.22 / 86.71 (112) | 93.42 / 98.43 (440) | 36.53 / 97.92 (124) | 92.39 / 93.60 (641) | 42.94 / 92.90 (165) |
+| All-vs-all | 91.89 / 95.61 (220) | 75.21 / 86.71 (112) | 93.44 / 98.43 (442) | 36.78 / 97.96 (127) | 92.43 / 93.78 (645) | 42.92 / 92.90 (167) |
+
+In stand-alone tests of step 12, greedy clusters are nearly pure (about 99.9%
+or more of the element pairs it puts together are together in the all-vs-all
+clusters), and it errs toward splitting; lotus keeps 76% of the all-vs-all pairs with 100 representatives
+per cluster against 49% with 20, for 3 more minutes.  The later steps absorb
+most of the splitting.  The search itself took 0.5, 4.6, 15.5, 8.5 and 70
+minutes with 8 threads, against 0.5, 3, 20–27, 5.5 and 87–105 with 16.  It
+helps most where hits per element are high: 27 minutes on mouse (8 threads)
+against 60–110 (16 threads).  On mouse the depth-jump check drops the same two
+L1 models as after all-vs-all clustering.
+
+Greedy holds one bucket of a round's hits at a time (`--bucket-hits`, 2 M by
+default, split by query element), and its singleton scores are dropped as
+elements join clusters.  Lotus peaks at 2.0 GB, and its clusters are identical
+with the buckets on or off.
 
 #### Held-out genomes
 
@@ -1324,17 +1489,21 @@ never used for tuning.  The standards are RepeatMasker runs:
 
 - fruit fly, *C. elegans* and zebrafish: the curated Dfam 3.9 families of
   the species and its ancestors;
-- soybean: RepBase 31.09's entries for the species.
+- soybean and maize: RepBase 31.09's entries for the species.
 
-All runs used 8 threads.
+All runs used 8 threads.  Fly, *C. elegans*, zebrafish and soybean were rerun
+(2026-11-05/06) with the code maize used, greedy step 12 and the depth-jump
+check included; their times are from a busier machine than the first runs
+(86, 7, 565 and 881 min).
 
 | Genome | LTR share | Sensitivity | Precision | Recovered LTR / INT | Time |
 |--------|-----------|-------------|-----------|---------------------|------|
-| *D. melanogaster* (Release 6) | 11.8% | 92.71% | 96.44% | 94/142 / 85/130 | 86 min |
-| *C. elegans* (WBcel235) | 0.6% | 23.74% | 53.85% | 9/23 / 8/18 | 7 min |
-| Zebrafish (GRCz13ab) | 5.6% | 46.58% | 95.01% | 266/390 / 267/366 | 565 min |
-| Zebrafish, without DIRS and Ngaro | 3.5% | 75.45% | 94.98% | | |
-| Soybean (Glycine_max_v4.0) | 28.2% | 99.27% | 79.34% | 235/251 / 241/250 | 881 min |
+| *D. melanogaster* (Release 6) | 11.8% | 92.66% | 96.39% | 94/142 / 85/130 | 113 min |
+| *C. elegans* (WBcel235) | 0.6% | 23.74% | 53.85% | 9/23 / 8/18 | 11 min |
+| Zebrafish (GRCz13ab) | 5.6% | 46.53% | 95.00% | 266/390 / 267/366 | 823 min |
+| Zebrafish, without DIRS and Ngaro | 3.5% | 75.37% | 94.97% | | |
+| Soybean (Glycine_max_v4.0) | 28.2% | 99.20% | 79.49% | 235/251 / 241/250 | 1,094 min |
+| Maize (Zm-B73-REFERENCE-NAM-5.0) | 75.0% | 98.07% | 98.75% | 521/788 / 537/667 | 3,012 min |
 
 - **Zebrafish: DIRS and Ngaro.** Dfam files DIRS and Ngaro elements under
   the LTR class.  They make up 38% of zebrafish's LTR-class bases, and the
@@ -1352,11 +1521,28 @@ All runs used 8 threads.
   28%.  91.5% of the false-positive bases are unannotated by the standard;
   only 5% come from families with no curated match, and the rest are extra
   copies of curated families.  RepBase's 251 soybean LTR models seem to
-  miss copies more than the library invents them.
-- **Maize.** The run did not finish.  ltr-forage kept 77,485 elements
-  (155,000 LTR records), and step 12's all-vs-all search, at about 10,750
-  hits per query, would have taken about 10 days for the LTRs alone.
-  Genomes this rich in LTR elements need a different pre-clustering step.
+  miss copies more than the library invents them.  The depth-jump check
+  dropped one LTR model here, and it is a real LTR: RepeatMasker calls its
+  origin GmGYPSY10_LTR (9% divergence).  Its median depth rose 45-fold
+  after the cuts and its element has no TSD or TG..CA ends.  Left as is:
+  held-out results are not used for tuning.
+- **Maize.** ltr-forage kept 77,485 elements (155,000 LTR records).  Step
+  12's all-vs-all search was first estimated at about 10 days for the LTRs
+  alone, so this run (2026-11-02/04) used the later greedy step 12, which
+  the probe chose by itself (2,365 M projected hits), and the depth-jump
+  check.  The library has 839
+  families.  The genome is 75% LTR by the standard, so precision alone says
+  little here: specificity is 96.26%, with 20.4 Mb of false-positive
+  masking.  Most of the time went to depth cleanup (1,360 min), the flank
+  filter (690) and greedy clustering (477, with its probe).  The flank
+  search grows much faster than its input: 151 MB of flanks took 690 min
+  against 33 min for soybean's 22 MB.  The check on internal copies dropped
+  four models here, and all four are LTR sequence, not another repeat: they
+  match curated Copia and Huck internals at 92-95% identity, and their
+  copies probably belong to close relatives with many more elements.  The
+  rule assumes otherwise.  It now applies only with `--early-tier`, the
+  one setting where it changed a tuning genome, so a default run keeps
+  these four models; the maize row predates that.
 
 ---
 

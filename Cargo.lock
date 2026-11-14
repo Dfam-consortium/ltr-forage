@@ -800,8 +800,8 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rmblast-lib"
-version = "3.0.10"
-source = "git+https://github.com/Dfam-consortium/RMBlast.git?tag=3.0.10#3be08b050801e453673b154f9be017906df539c3"
+version = "3.0.12"
+source = "git+https://github.com/Dfam-consortium/RMBlast.git?tag=3.0.12#d85b699ea2916c0f4fce6f1333935e5a2bb8577c"
 dependencies = [
  "anyhow",
  "memmap2",
@@ -812,8 +812,8 @@ dependencies = [
 
 [[package]]
 name = "rmstats"
-version = "3.0.10"
-source = "git+https://github.com/Dfam-consortium/RMBlast.git?tag=3.0.10#3be08b050801e453673b154f9be017906df539c3"
+version = "3.0.12"
+source = "git+https://github.com/Dfam-consortium/RMBlast.git?tag=3.0.12#d85b699ea2916c0f4fce6f1333935e5a2bb8577c"
 dependencies = [
  "cc",
 ]

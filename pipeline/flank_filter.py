@@ -3,10 +3,16 @@
 sites, so their flanks differ; copies of a duplicated block share flanking sequence on both sides.
 
 usage: flank_filter.py write <clusters.json> <genome.fa> <flanks.fa> [--flank 1000]
+       flank_filter.py bins  <clusters.json> <flanks.fa> <bin dir> [--bin-elements 1000]
        flank_filter.py score <clusters.json> <flanks.tsv> <sd_clusters.tsv> [--min-len 300] [--min-id 80]
 
 write: the --flank bp left and right of every element in a cluster of >= 2 elements (needs <genome.fa>.fai;
        written if missing).  Search flanks.fa against itself (rmblastn) between the two calls.
+bins:  split flanks.fa into files of whole clusters (about --bin-elements elements each) and one side,
+       <bin dir>/b<N>.<L|R>.fa, each searched against itself.  score reads only same-cluster, same-side pairs,
+       so the calls match one search of everything; it saves the all-vs-all of unrelated clusters (maize
+       689 -> 48 min and 44 -> 1 GB of hits, soybean 33 -> 1.4 min, mouse 11 -> 2.1 min; identical calls on
+       seven genomes, 2026-11-05).
 score: a member pair shares a flank when its same-side flanks align over >= --min-len bp at >= --min-id %;
        a cluster is 'sd' when more than half of its member pairs share both flanks, or when every member
        shares both flanks with some other member (no independent insertion at all).  Writes one row per
@@ -41,9 +47,10 @@ def fai(genome):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
-    ap.add_argument('mode', choices=('write', 'score'))
+    ap.add_argument('mode', choices=('write', 'bins', 'score'))
     ap.add_argument('clusters'); ap.add_argument('a'); ap.add_argument('b')
     ap.add_argument('--flank', type=int, default=1000)
+    ap.add_argument('--bin-elements', type=int, default=1000)
     ap.add_argument('--min-len', type=int, default=300)
     ap.add_argument('--min-id', type=float, default=80)
     a = ap.parse_args()
@@ -67,6 +74,25 @@ def main():
                     for side, seq in (('L', get(s, x - a.flank, x - 1)), ('R', get(s, y + 1, y + a.flank))):
                         if len(seq) >= a.min_len: fh.write(f'>{e}|{side}\n{seq}\n'); n += 1
         print(f'{n} flanks from {sum(len(v) for v in multi.values())} elements in {len(multi)} multi-element clusters')
+        return
+
+    if a.mode == 'bins':
+        os.makedirs(a.b, exist_ok=True)
+        binof, nb, cur = {}, 0, 0   # largest clusters first; a cluster bigger than a bin gets one of its own
+        for c, v in sorted(multi.items(), key=lambda x: (-len(x[1]), str(x[0]))):
+            if cur and cur + len(v) > a.bin_elements: nb += 1; cur = 0
+            binof[c] = nb; cur += len(v)
+        fh = {}
+        w = None
+        for l in open(a.a):
+            if l.startswith('>'):
+                e, side = l[1:].split()[0].rsplit('|', 1)
+                k = (binof[cl[e]], side)
+                if k not in fh: fh[k] = open(os.path.join(a.b, f'b{k[0]}.{k[1]}.fa'), 'w')
+                w = fh[k]
+            w.write(l)
+        for f in fh.values(): f.close()
+        print(f'{len(fh)} bin files ({nb + 1 if multi else 0} bins of whole clusters, by side)')
         return
 
     share = collections.defaultdict(int)
