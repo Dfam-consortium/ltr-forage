@@ -6,7 +6,10 @@ for line in open(rm):
     c = line.split()
     if len(c) < 15 or not c[0].isdigit() or not c[10].startswith('LTR'): continue
     ann[c[4]].append((int(c[5]), int(c[6]), c[8], c[9], float(c[1])))
-def isint(n): return n.endswith(('-int','_I','-I','_int','I'))
+# a bare trailing I names an internal only in Repbase-named annotations (ATCOPIA19I); where internals are
+# marked -int (RepeatMasker's libraries) it is part of an LTR's name (MLT1I)
+BARE_I = not any(a[3].endswith('-int') for lst in ann.values() for a in lst)
+def isint(n): return n.endswith(('-int','_I','-I','_int')) or (BARE_I and n.endswith('I'))
 truth = collections.defaultdict(list)
 for chrom, lst in ann.items():
     lst.sort()

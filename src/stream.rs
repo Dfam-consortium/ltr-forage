@@ -32,6 +32,11 @@ impl ArrayReader {
             bail!("unsupported element width {width}");
         }
         let mut file = File::open(path)?;
+        // a truncated index is an error here rather than a panic in a worker's read
+        let (have, need) = (file.metadata()?.len(), byte_offset + (num_elements * width) as u64);
+        if have < need {
+            bail!("{path} is truncated: {have} bytes, but its header places array data up to byte {need}");
+        }
         file.seek(SeekFrom::Start(byte_offset))?;
         Ok(ArrayReader {
             file,
@@ -51,7 +56,7 @@ impl ArrayReader {
         let bytes = n * self.width;
         self.file
             .read_exact(&mut self.buf[..bytes])
-            .expect("short read from .sufr file");
+            .expect("read error in the .sufr file (its length was checked when it was opened)");
         self.remaining -= n;
         self.pos = 0;
         self.filled = bytes;

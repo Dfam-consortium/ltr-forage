@@ -27,7 +27,9 @@ def union(iv):
 
 def add_coverage(cov, path, kind, rec2elem):
     """directed coverage: cov[(a,b)][kind] = (fraction of a's record covered by b's, of b's by a's, bits);
-    the best record pair of the kind is kept"""
+    the record pair of the kind that covers most of a's record is kept (phase 2 asks for that).
+    cov[(a,b)][kind + 'max'] is the highest coverage of either record over every record pair of the two
+    elements, the same for (a,b) and (b,a): phase 1's LTR test, which is of the pair and has no direction."""
     pair = collections.defaultdict(lambda: {'q': [], 's': [], 'ql': 0, 'sl': 0, 'bits': 0.0})
     for l in open(path):
         q, s, pid, ln, qs, qe, ss, se, ql, sl, bits = l.split('\t'); q = q.split('#')[0]; s = s.split('#')[0]
@@ -42,12 +44,16 @@ def add_coverage(cov, path, kind, rec2elem):
         for a, b, ca, cb in ((eq, es, cq, cs), (es, eq, cs, cq)):
             d = cov[(a, b)]; old = d.get(kind, (0, 0, 0))
             if ca > old[0] or (ca == old[0] and p['bits'] > old[2]): d[kind] = (ca, cb, p['bits'])
+            d[kind + 'max'] = max(d.get(kind + 'max', 0), cq, cs)
 
 def linked(d):
-    """phase 1: internals cover each other at 80%, and the LTRs cover the shorter one at 80%"""
+    """phase 1: internals cover each other at 80%, and some LTR of one covers 80% of an LTR of the other.
+    The same answer for (a,b) and (b,a): an element has one internal record, and the LTR test takes the
+    best of the four LTR pairs.  (It was read off the pair covering most of a's LTR, so two elements whose
+    LTR records differ in length could link in one direction only, and the clustering tests one.)"""
     if 'I' not in d or 'L' not in d: return False
-    ci, cj, _ = d['I']; li, lj, _ = d['L']
-    return ci >= 0.8 and cj >= 0.8 and max(li, lj) >= 0.8
+    ci, cj, _ = d['I']
+    return ci >= 0.8 and cj >= 0.8 and d['Lmax'] >= 0.8
 
 def covered(d):
     """phase 2: a's own internal and LTR are each covered at 80% by b's; the score of the cover"""
@@ -57,7 +63,7 @@ def covered(d):
 def report(label, elems, member):
     cores = collections.defaultdict(list)
     for e in elems: cores[member(e)].append(e)
-    print(f"{label}: {len(cores)} clusters ({sum(1 for v in cores.values() if len(v)==1)} singletons, largest {max(len(v) for v in cores.values())})")
+    print(f"{label}: {len(cores)} clusters ({sum(1 for v in cores.values() if len(v)==1)} singletons, largest {max((len(v) for v in cores.values()), default=0)})")
     return cores
 
 def main():

@@ -23,12 +23,13 @@ import bisect
 import collections
 import sys
 
-INTERNAL_SUFFIXES = ('-int', '_int', '-I', '_I', 'I')
+INTERNAL_SUFFIXES = ('-int', '_int', '-I', '_I')
+BARE_I = False   # a bare trailing I (Repbase: ATCOPIA19I) names an internal; set by load_truth
 BINS = [(0, 5), (5, 10), (10, 15), (15, 20), (20, 100)]
 
 
 def is_internal(name):
-    return name.endswith(INTERNAL_SUFFIXES)
+    return name.endswith(INTERNAL_SUFFIXES) or (BARE_I and name.endswith('I'))
 
 
 def load_truth(rm_path):
@@ -39,6 +40,11 @@ def load_truth(rm_path):
             if len(c) < 15 or not c[0].isdigit() or not c[10].startswith('LTR'):
                 continue
             ann[c[4]].append((int(c[5]), int(c[6]), c[8], c[9], float(c[1])))
+    # RepeatMasker's own libraries mark internals with -int, and a bare trailing I is then part of an LTR's
+    # name (MLT1I, an LTR, was taken for an internal: it could not start an element, and one lying between
+    # two LTRs of one name made them an "intact element")
+    global BARE_I
+    BARE_I = not any(a[3].endswith('-int') for lst in ann.values() for a in lst)
     truth = []
     for chrom, lst in ann.items():
         lst.sort()

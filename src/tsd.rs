@@ -190,7 +190,7 @@ fn search_tsd_at_outer_borders(
     text: &[u8],
     cand: &LtrCandidate,
     seq_start: usize,
-    seq_end: usize,   // last valid byte in this sequence (exclusive separator)
+    seq_end: usize,   // last base of this sequence
     min_tsd: usize,
     max_tsd: usize,
     vicinity: usize,
@@ -554,10 +554,13 @@ pub fn annotate_tsd_and_motif(
     tiered_tsd: bool,
 ) -> TsdMotifInfo {
     let seq_start = sequence_starts[cand.seq_num];
+    // the sequence's last base (GT's seqendpos): two before the next sequence's start, since
+    // one separator byte lies between, or two before the end of the text (the terminator)
     let seq_end = sequence_starts
         .get(cand.seq_num + 1)
-        .map(|&s| s - 1)
-        .unwrap_or(text.len() - 1);
+        .copied()
+        .unwrap_or(text.len())
+        .saturating_sub(2);
 
     let mut info = TsdMotifInfo {
         has_tsd:          false,

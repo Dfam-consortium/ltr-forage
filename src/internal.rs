@@ -62,7 +62,8 @@ pub fn tiles(text: &[u8], start: usize, end: usize) -> Vec<Vec<u8>> {
     let mut p = start;
     while p + K - 1 <= end {
         let t = &text[p..p + K];
-        if !t.contains(&b'N') {
+        // only A/C/G/T tiles: N and the other IUPAC codes match nothing in the index
+        if t.iter().all(|c| matches!(c, b'A' | b'C' | b'G' | b'T')) {
             out.push(t.to_vec());
         }
         p += STRIDE;
@@ -104,12 +105,19 @@ where
             raw[r.query_num] = r.count;
         }
     }
+    Ok(both_strands(&index, &raw))
+}
+
+/// Occurrences of each queried tile on both strands: its own count plus its reverse
+/// complement's.  A tile that is its own reverse complement (20 nt of AT repeats, say) has
+/// one count, not two.
+fn both_strands(index: &HashMap<Vec<u8>, usize>, raw: &[usize]) -> HashMap<Vec<u8>, usize> {
     let mut counts = HashMap::with_capacity(index.len());
-    for (s, &i) in &index {
-        let both = raw[i] + index.get(&revcomp(s)).map_or(0, |&j| raw[j]);
+    for (s, &i) in index {
+        let both = raw[i] + index.get(&revcomp(s)).map_or(0, |&j| if j == i { 0 } else { raw[j] });
         counts.insert(s.clone(), both);
     }
-    Ok(counts)
+    counts
 }
 
 /// Statistics for one region from the counted tiles.
@@ -150,6 +158,17 @@ mod tests {
         assert!((s.multi_frac - 0.7).abs() < 1e-9);
         assert!((s.gap_frac - 0.3).abs() < 1e-9);
         assert_eq!(s.gap_bp, 3 * STRIDE);
+    }
+
+    #[test]
+    fn palindromic_tile_counted_once() {
+        let pal = b"ATATATATATATATATATAT".to_vec();
+        assert_eq!(revcomp(&pal), pal);
+        let (fwd, rev) = (b"AAAAAAAAAAAAAAAAAAAC".to_vec(), b"GTTTTTTTTTTTTTTTTTTT".to_vec());
+        let index: HashMap<Vec<u8>, usize> = [(pal.clone(), 0), (fwd.clone(), 1), (rev.clone(), 2)].into_iter().collect();
+        let c = both_strands(&index, &[2, 1, 4]);
+        assert_eq!(c[&pal], 2); // at two loci: below MULTI, where the doubled count was 4
+        assert_eq!((c[&fwd], c[&rev]), (5, 5));
     }
 
     #[test]

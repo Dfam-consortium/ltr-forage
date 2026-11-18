@@ -38,20 +38,20 @@ def main():
     def dominant(chrom, s, e):
         v = ann.get(chrom, [])
         k = bisect.bisect_left(starts.get(chrom, []), s - 20000)
-        cov, name = collections.Counter(), {}
+        cov, name = collections.Counter(), collections.defaultdict(collections.Counter)
         while k < len(v) and v[k][0] <= e:
             a = v[k]
             o = min(e, a[1]) - max(s, a[0]) + 1
             if o > 0:
                 cov[a[2]] += o
-                name[a[2]] = a[3]
+                name[a[2]][a[3]] += o
             k += 1
         if not cov:
             return 'unannotated', ''
         cls, o = cov.most_common(1)[0]
         if o < 0.5 * (e - s + 1):
             return 'mostly-unannotated', ''
-        return cls, name[cls]
+        return cls, name[cls].most_common(1)[0][0]   # the family covering most of it (was the last one overlapping)
 
     table, n, same_family = collections.Counter(), 0, 0
     with open(pred_path) as fh:

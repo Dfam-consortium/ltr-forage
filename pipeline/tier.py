@@ -6,7 +6,7 @@ usage: tier.py <final.fa> <clusters.json> <cand.tsv> <core.fa> <candidates.fa>
 Multi-element clusters go to core.  A singleton cluster goes to core when its
 element is <= max-len long and:
   without --pbs:  LTR identity >= min-id
-  with --pbs:     LTR identity >= min-id OR a tRNA PBS (pbs_mm12 <= 1)
+  with --pbs:     LTR identity >= min-id OR a tRNA PBS (ltr-forage's pbs_mm12 column is not '.')
   with --strict:  LTR identity >= min-id AND a tRNA PBS
 Rice singletons (classes from classify2.py): id>=90 keeps 87 of 108 clean
 sole-representative families and 50 of 213 nested/chimeric/unannotated ones;
@@ -19,7 +19,9 @@ passenger sequence and the rest looks like LTR material missing from the referen
 
 Each family is written as one LTR record and one internal record (the 3' LTR
 record is dropped; it is a near-identical copy of the 5' one), unless --both-ltrs."""
-import sys, re, json, csv, bisect, collections, argparse
+import sys, os, json, csv, collections, argparse
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from records import element_lookup, is_ltr
 ap = argparse.ArgumentParser()
 for p in ('fa', 'clusters', 'tsv', 'core', 'cand'): ap.add_argument(p)
 ap.add_argument('--min-id', type=float, default=90); ap.add_argument('--max-len', type=int, default=9000)
@@ -28,15 +30,7 @@ a = ap.parse_args()
 cl = json.load(open(a.clusters)); size = collections.Counter(cl.values())
 feat = {f"{x['seq']}:{x['elem_start']}..{x['elem_end']}": x for x in csv.DictReader(open(a.tsv), delimiter='\t')}
 pbs = {x['element']: x['pbs_mm12'] != '.' for x in csv.DictReader(open(a.pbs), delimiter='\t')} if a.pbs else {}
-iv = collections.defaultdict(list)
-for k in cl:
-    c, s, e = re.match(r'(.+):(\d+)\.\.(\d+)$', k).groups(); iv[c].append((int(s), int(e), k))
-for v in iv.values(): v.sort()
-def element(name):
-    c, s = re.match(r'(.+):(\d+)\.\.', name).groups(); s = int(s); v = iv[c]
-    i = bisect.bisect_right(v, (s, float('inf'), '')) - 1
-    while i >= 0 and v[i][1] < s: i -= 1
-    return v[i][2]
+element = element_lookup(cl, a.tsv)
 def admit(k):
     x = feat[k]
     if int(x['elem_len']) > a.max_len: return False
@@ -50,10 +44,11 @@ for l in open(a.fa):
 out = {True: open(a.core, 'w'), False: open(a.cand, 'w')}; why = collections.Counter(); seen = {}; nltr = collections.Counter()
 for h, s in recs:
     name = h[1:].split()[0]; k = element(name)
+    if k is None: sys.exit(f'tier.py: record {name} belongs to no clustered element')
     if k not in seen:
         multi = size[cl[k]] > 1; ok = multi or admit(k)
         seen[k] = ok; why['multi' if multi else 'singleton kept' if ok else 'singleton -> candidates'] += 1
-    if '_LTR' in name.split('#')[0] and not a.both_ltrs:
+    if is_ltr(name) and not a.both_ltrs:
         nltr[k] += 1
         if nltr[k] > 1: continue
     out[seen[k]].write(h + ''.join(s))

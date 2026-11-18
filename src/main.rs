@@ -188,8 +188,9 @@ struct Args {
     /// HMMER3 file of transposable-element protein profiles; each
     /// candidate's six-frame translation is searched against it with nail
     /// (needs nail and MMseqs2, see --nail and --mmseqs) and the order,
-    /// superfamily and strand reported.  The default is LTR_retriever's
-    /// TEfam.hmm, shipped in data/
+    /// superfamily and strand reported.  The default is data/TEdomains.hmm
+    /// (122 Pfam profiles that carry their class, data/domains/README.md);
+    /// LTR_retriever's TEfam.hmm is also shipped in data/
     #[arg(long, value_name = "FILE", default_value = DEFAULT_HMM)]
     domain_hmm: String,
 
@@ -260,8 +261,8 @@ struct Args {
     #[arg(long)]
     domain_search_vetoed: bool,
 
-    /// Skip the genome tRNA scan behind the PBS columns of --format tsv
-    /// (pbs_offset is then -1 and pbs_trna, pbs_mm12, pbs_edist18 are ".")
+    /// Skip the genome tRNA scan behind the PBS columns (they are then ".")
+    /// and the PBS's part in --overlaps evidence
     #[arg(long)]
     no_pbs_trna: bool,
 
@@ -277,8 +278,9 @@ struct Args {
     #[arg(long, value_name = "FILE", conflicts_with = "ltrharvest")]
     trna_out: Option<String>,
 
-    /// Longest tRNA intron searched for (ARAGORN -i default 3000; 0 = none)
-    #[arg(long, default_value_t = trna::MAXINTRONLEN, value_name = "BP")]
+    /// Longest tRNA intron searched for (0 = none; 3000, the default, is
+    /// ARAGORN's -i default and its upper limit)
+    #[arg(long, default_value_t = trna::MAXINTRONLEN, value_name = "BP", value_parser = clap::value_parser!(i64).range(0..=trna::MAXINTRONLEN))]
     trna_intron_max: i64,
 
     /// Only scan FASTA for tRNA genes (ARAGORN -t -gc1 -l -i port), print
@@ -310,7 +312,7 @@ struct Args {
     fastan_only: bool,
 }
 
-const DEFAULT_HMM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/TEfam.hmm");
+const DEFAULT_HMM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/TEdomains.hmm");
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 enum Overlaps {
@@ -344,6 +346,13 @@ fn version_of(prog: &std::path::Path, flag: &str) -> Option<(u32, u32, u32)> {
     })
 }
 
+/// Name of the domain search's scratch directory.  The process id alone repeats across hosts and
+/// containers that share a temporary directory, so the start time is added.
+fn scratch_name() -> String {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("ltr-forage-nail-{}-{:x}", std::process::id(), t)
+}
+
 /// A file can be made in `dir` (made and removed again).
 fn writable(dir: &std::path::Path) -> bool {
     let probe = dir.join(format!(".ltr-forage-probe-{}", std::process::id()));
@@ -352,8 +361,44 @@ fn writable(dir: &std::path::Path) -> bool {
     ok
 }
 
-fn setup(args: &Args) -> Result<Setup> {
+/// Options that only steps skipped by --ltrharvest read (clap ids, i.e. field names).
+const NOT_IN_LTRHARVEST: &[&str] = &[
+    "dedup_tol", "reextend_ltr_max", "reextend_vicinity", "reextend_first", "reextend_first_margin", "trim_window",
+    "trim_matches", "internal_stats", "domain_hmm", "no_domains", "domain_evalue", "domain_flank", "nail", "mmseqs",
+    "temp_dir", "keep_coding_ltrs", "keep", "internal_gap_max", "tandem_max", "no_polya_veto", "domain_search_vetoed",
+    "no_pbs_trna", "pbs_domain_strand", "trna_intron_max",
+];
+
+/// `given(id)`: the option was on the command line (not its default).
+fn setup(args: &Args, given: &dyn Fn(&str) -> bool) -> Result<Setup> {
     let mut bad: Vec<String> = Vec::new();
+    if args.ltrharvest {
+        let ignored: Vec<String> = NOT_IN_LTRHARVEST.iter().filter(|id| given(id)).map(|id| format!("--{}", id.replace('_', "-"))).collect();
+        if !ignored.is_empty() {
+            bad.push(format!("{} would have no effect: --ltrharvest stops after LTRharvest's own steps", ignored.join(", ")));
+        }
+    }
+    // the X-drop extension and the edit distance assume a positive match score and negative
+    // penalties (xdrop.rs divides by their gcd); the windows must not be empty
+    if args.mat <= 0 { bad.push(format!("--mat {} must be positive", args.mat)); }
+    for (opt, v) in [("--mis", args.mis), ("--ins", args.ins), ("--del", args.del)] {
+        if v >= 0 { bad.push(format!("{} {} must be negative", opt, v)); }
+    }
+    if args.xdrop < 0 { bad.push(format!("--xdrop {} must not be negative", args.xdrop)); }
+    if !(0.0..=100.0).contains(&args.similar) { bad.push(format!("--similar {} must be a percentage, 0 to 100", args.similar)); }
+    if args.min_seed == 0 { bad.push("--min-seed must be at least 1".into()); }
+    if args.ltr_min == 0 || args.ltr_min > args.ltr_max {
+        bad.push(format!("--ltr-min {} must be at least 1 and no more than --ltr-max {}", args.ltr_min, args.ltr_max));
+    }
+    if args.dist_min > args.dist_max { bad.push(format!("--dist-min {} is above --dist-max {}", args.dist_min, args.dist_max)); }
+    if args.vicinity == Some(0) { bad.push("--vicinity must be at least 1".into()); }
+    if let (Some(a), Some(b)) = (args.mintsd, args.maxtsd) {
+        if a > b { bad.push(format!("--mintsd {} is above --maxtsd {}", a, b)); }
+    }
+    if !(0.0..=1.0).contains(&args.tandem_max) { bad.push(format!("--tandem-max {} must be a fraction, 0 to 1", args.tandem_max)); }
+    if args.trim_window == 0 || args.trim_matches > args.trim_window {
+        bad.push(format!("--trim-matches {} of --trim-window {}: the window must be at least 1 and hold the matches", args.trim_matches, args.trim_window));
+    }
     let overlaps = args.overlaps.unwrap_or(if args.ltrharvest { Overlaps::Best } else { Overlaps::Evidence });
     let format = args.format.clone().unwrap_or(if args.ltrharvest { OutputFormat::Gt } else { OutputFormat::Tsv });
     if args.ltrharvest && overlaps == Overlaps::Evidence {
@@ -366,7 +411,8 @@ fn setup(args: &Args) -> Result<Setup> {
         if !std::path::Path::new(p).is_file() { bad.push(format!("index not found: {}", p)); }
     }
     let mut nail = None;
-    if !args.ltrharvest && !args.no_domains {
+    // --fastan-only stops before the domain search and needs none of its programs
+    if !args.ltrharvest && !args.no_domains && !args.fastan_only {
         match std::fs::read_to_string(&args.domain_hmm) {
             Err(e) => bad.push(format!("cannot read --domain-hmm {}: {}", args.domain_hmm, e)),
             Ok(t) if !t.trim_start().starts_with("HMMER3") => bad.push(format!("--domain-hmm {} is not a HMMER3 profile file", args.domain_hmm)),
@@ -393,7 +439,7 @@ fn setup(args: &Args) -> Result<Setup> {
         }
         match (n, m) {
             (Ok(n), Ok(m)) => {
-                nail = Some(domain::Nail { nail: n, mmseqs: m, threads: 0, work: tmp.join(format!("ltr-forage-nail-{}", std::process::id())) })
+                nail = Some(domain::Nail { nail: n, mmseqs: m, threads: 0, work: tmp.join(scratch_name()) })
             }
             (n, m) => {
                 for e in [n.err(), m.err()].into_iter().flatten() {
@@ -417,18 +463,26 @@ fn setup(args: &Args) -> Result<Setup> {
 }
 
 /// BED intervals as half-open text coordinates, clipped to their sequence;
-/// returns the intervals, their total length and the lines naming unknown sequences
+/// returns the intervals, their total length and the lines naming unknown sequences.
+/// Fields are separated by tabs or spaces.  A line that is not a comment, a `track` or `browser`
+/// line, or three fields with numeric start <= end is an error: skipping it would leave part of
+/// the genome unmasked without a word.
 fn read_bed(path: &str, seq_names: &[String], seq_starts: &[usize], text_len: usize) -> Result<(Vec<(usize, usize)>, usize, usize)> {
     let idx: std::collections::HashMap<&str, usize> = seq_names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
     let (mut out, mut bp, mut unknown) = (Vec::new(), 0usize, 0usize);
-    for line in std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(path)?)) {
-        let line = line?;
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() < 3 || line.starts_with('#') || line.starts_with("track") { continue; }
-        let (Ok(a), Ok(b)) = (f[1].parse::<usize>(), f[2].parse::<usize>()) else { continue };
+    let fh = std::fs::File::open(path).with_context(|| format!("opening --mask-bed {}", path))?;
+    for (n, line) in std::io::BufRead::lines(std::io::BufReader::new(fh)).enumerate() {
+        let line = line.with_context(|| format!("reading --mask-bed {}", path))?;
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.is_empty() || line.starts_with('#') || f[0] == "track" || f[0] == "browser" { continue; }
+        let iv = if f.len() >= 3 { f[1].parse::<usize>().ok().zip(f[2].parse::<usize>().ok()).filter(|(a, b)| a <= b) } else { None };
+        let Some((a, b)) = iv else {
+            anyhow::bail!("--mask-bed {} line {}: expected 'name start end' with start <= end, found: {}", path, n + 1, line);
+        };
         let Some(&k) = idx.get(f[0]) else { unknown += 1; continue };
-        let end = if k + 1 < seq_starts.len() { seq_starts[k + 1] } else { text_len };
-        let (a, b) = (seq_starts[k] + a, (seq_starts[k] + b).min(end));
+        // the sequence's bases end one before the separator that precedes the next sequence
+        let end = seq_starts.get(k + 1).copied().unwrap_or(text_len).saturating_sub(1);
+        let (a, b) = ((seq_starts[k] + a).min(end), (seq_starts[k] + b).min(end));
         if a < b { out.push((a, b)); bp += b - a; }
     }
     Ok((out, bp, unknown))
@@ -497,16 +551,20 @@ fn overlapping_keep_indices(
     (0..n).filter(|&i| !skipped[i]).collect()
 }
 
+/// Size the global thread pool; says so when that fails (the run would then use every core).
+fn set_threads(n: usize) {
+    if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(n).build_global() {
+        eprintln!("warning: could not set {} thread(s) ({}); running with {}", n, e, rayon::current_num_threads());
+    }
+}
+
 // --------------------------------------------------
 fn run<T>(args: &Args, st: &Setup) -> Result<()>
 where
     T: Int + FromUsize<T> + Sized + Send + Sync + serde::ser::Serialize,
 {
     if args.threads > 0 {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(args.threads)
-            .build_global()
-            .ok(); // ok() because build_global fails if already initialised
+        set_threads(args.threads);
     }
     // threads == 0: leave Rayon at its default (all logical CPUs, or RAYON_NUM_THREADS)
 
@@ -525,6 +583,11 @@ where
     let text: &[u8] = &sf.text;
     let num_suffixes = sf.len_suffixes.to_usize();
     let seq_starts: Vec<usize> = sf.sequence_starts.iter().map(|v| v.to_usize()).collect();
+    // Text position of the last base of sequence k.  Every sequence is followed by one byte that is
+    // not a base (the separator, or sufr's terminator after the last one), so this is two before the
+    // next sequence's start, or the text's length.
+    let text_len = text.len();
+    let seq_last = |k: usize| seq_starts.get(k + 1).copied().unwrap_or(text_len).saturating_sub(2);
     let width = std::mem::size_of::<T>();
     let sa_pos = sf.suffix_array_pos as u64;
     let lcp_pos = sf.lcp_pos as u64;
@@ -590,7 +653,8 @@ where
         }
         extra.extend(arrays.iter().map(|a| (seq_starts[a.seq] + a.bbeg, seq_starts[a.seq] + a.aend)));
     }
-    let wild = maxpairs::WildRuns::with_extra(text, &extra);
+    let wild = maxpairs::WildRuns::new(text);
+    let mask = maxpairs::WildRuns::masked(&extra);
     let n_pieces = rayon::current_num_threads() * 4;
     let pieces = stream::split_points(sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
     let per_piece: Vec<Result<Vec<ltr::Seed>>> = pieces
@@ -607,10 +671,11 @@ where
                 n,
                 args.min_seed,
                 &wild,
+                &mask,
                 &mut |pos1, pos2, len| {
                     if let Some(seed) = ltr::filter_seed(
                         pos1, pos2, len,
-                        args.ltr_min, args.ltr_max,
+                        args.ltr_max,
                         args.dist_min, args.dist_max,
                         &seq_starts,
                     ) {
@@ -631,9 +696,9 @@ where
     // TSD/motif search (which moves the outer boundaries), then the length and
     // distance check on the moved boundaries, then the edit distance.  The sort
     // and dedup that follow operate on the post-TSD outer boundaries.
-    // Outside --ltrharvest the TSD search runs with mintsd 0: it records a TSD (the
-    // xdrop_tsd_len column) but neither moves the ends nor rejects; the TSD the
-    // decisions use is searched at the final ends (features::tsd_or_mm1).
+    // Outside --ltrharvest there is no TSD search here (mintsd 0 turns it off, so the
+    // xdrop_tsd_len column is always 0 and the ends do not move); the TSD the decisions
+    // use is searched at the final ends (features::tsd_or_mm1).
     let (mintsd, maxtsd, vicinity) = if args.ltrharvest {
         (args.mintsd.unwrap_or(4), args.maxtsd.unwrap_or(20), args.vicinity.unwrap_or(60))
     } else {
@@ -726,7 +791,7 @@ where
     paired.dedup_by_key(|(_, c, _)| (c.seq_num, c.left_ltr_start, c.right_ltr_end));
 
     // Strip the seed index — no longer needed.
-    let mut paired: Vec<(ltr::LtrCandidate, tsd::TsdMotifInfo)> =
+    let paired: Vec<(ltr::LtrCandidate, tsd::TsdMotifInfo)> =
         paired.into_iter().map(|(_, c, ti)| (c, ti)).collect();
     eprintln!("[5 duplicates] {} candidate(s) after removing identical ends", paired.len());
 
@@ -777,10 +842,7 @@ where
             .par_iter()
             .map(|(c, ti)| {
                 let seq_start = seq_starts[c.seq_num];
-                let seq_end = seq_starts
-                    .get(c.seq_num + 1)
-                    .map(|&s| s - 1)
-                    .unwrap_or(text.len() - 1);
+                let seq_end = seq_last(c.seq_num);
                 let run = |cf: &reextend::ReextendConfig| reextend::reextend(
                     &aligner, cf, &text, seq_start, seq_end,
                     ti.left_ltr_start, ti.left_ltr_end, ti.right_ltr_start, ti.right_ltr_end,
@@ -939,7 +1001,7 @@ where
             .collect();
         let mut seqs: Vec<Option<&[u8]>> = Vec::with_capacity(3 * n);
         for ((&(_, _, _, l2e), (c, _)), (&s, &skip)) in final_coords.iter().zip(surviving.iter()).zip(origins.iter().zip(skip_domains.iter())) {
-            let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+            let seq_end = seq_last(c.seq_num);
             seqs.push((!skip).then(|| &text[s..=(l2e + args.domain_flank).min(seq_end)]));
         }
         let ltrs = !args.keep_coding_ltrs;
@@ -988,12 +1050,13 @@ where
     };
 
     // ---- 8c: genome tRNA scan and PBS annotation ----
-    let want_pbs = st.format == OutputFormat::Tsv && !args.no_pbs_trna;
+    // Whatever the output format: the overlap choice in step 10 counts the PBS, so the kept set
+    // (--library, the keep column) must not depend on --format.
+    let want_pbs = !args.no_pbs_trna;
     let (pbs_calls, trna_calls): (Vec<(Option<pbs::PbsHit>, Option<usize>)>, Option<(Vec<Vec<trna::TrnaCall>>, usize)>) = if want_pbs || args.trna_out.is_some() {
         let t0 = std::time::Instant::now();
-        let ranges: Vec<(usize, usize)> = (0..seq_starts.len())
-            .map(|i| (seq_starts[i], seq_starts.get(i + 1).map(|&s| s - 1).unwrap_or(text.len() - 1)))
-            .collect();
+        // each sequence's bases, half-open
+        let ranges: Vec<(usize, usize)> = (0..seq_starts.len()).map(|i| (seq_starts[i], seq_last(i) + 1)).collect();
         let calls: Vec<Vec<trna::TrnaCall>> = ranges
             .par_iter()
             .map(|&(a, e)| trna::scan_sequence(&text[a..e], args.trna_intron_max))
@@ -1001,21 +1064,17 @@ where
         let n_calls: usize = calls.iter().map(|c| c.len()).sum();
         let all: Vec<trna::TrnaCall> = calls.iter().flatten().cloned().collect();
         let probes = pbs::Probes::from_calls(&all);
-        let out: Vec<(Option<pbs::PbsHit>, Option<usize>)> = if want_pbs || args.trna_out.is_some() {
-            surviving
-                .par_iter()
-                .zip(final_coords.par_iter())
-                .zip(domain_calls.par_iter())
-                .map(|(((c, _), &(_, l1e, l2s, _)), dc)| {
-                    let lo = seq_starts[c.seq_num];
-                    let hi = seq_starts.get(c.seq_num + 1).map(|&s| s - 2).unwrap_or(text.len() - 2);
-                    let strand = if args.pbs_domain_strand { dc.as_ref().map(|d| d.strand.as_str()).unwrap_or("?") } else { "?" };
-                    probes.annotate(text, l1e, l2s, lo, hi, strand)
-                })
-                .collect()
-        } else {
-            vec![(None, None); surviving.len()]
-        };
+        let out: Vec<(Option<pbs::PbsHit>, Option<usize>)> = surviving
+            .par_iter()
+            .zip(final_coords.par_iter())
+            .zip(domain_calls.par_iter())
+            .map(|(((c, _), &(_, l1e, l2s, _)), dc)| {
+                let lo = seq_starts[c.seq_num];
+                let hi = seq_last(c.seq_num);
+                let strand = if args.pbs_domain_strand { dc.as_ref().map(|d| d.strand.as_str()).unwrap_or("?") } else { "?" };
+                probes.annotate(text, l1e, l2s, lo, hi, strand)
+            })
+            .collect();
         eprintln!(
             "[8c tRNA → PBS] {} tRNA gene(s), {} PBS probe(s) ({}); {} candidate(s) with a 12-nt PBS, {} exact ({} elapsed)",
             n_calls, probes.len(), el(&t0),
@@ -1046,7 +1105,7 @@ where
         .zip(final_coords.par_iter())
         .map(|((c, _), &(l1s, l1e, l2s, l2e))| {
             let seq_off = seq_starts[c.seq_num];
-            let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+            let seq_end = seq_last(c.seq_num);
             (features::tsd_or_mm1(text, l1s, l2e, seq_off, seq_end, 4, 20, 1), features::motif_at(text, l1s, l2e),
              features::polya_ltrs(text, (l1s, l1e, l2s, l2e)))
         })
@@ -1126,7 +1185,13 @@ where
 
     // ---- Output ----
     match st.format {
-        OutputFormat::Gt => print_gt(args, st, sufr, &seq_starts, &surviving, &reext),
+        OutputFormat::Gt => {
+            // LTRharvest's table has no keep column, so it lists the predictions: the kept elements
+            let kept: Vec<usize> = (0..surviving.len()).filter(|&i| decisions[i].keep).collect();
+            let s: Vec<_> = kept.iter().map(|&i| surviving[i].clone()).collect();
+            let r: Vec<_> = kept.iter().map(|&i| reext[i].clone()).collect();
+            print_gt(args, st, sufr, &seq_starts, &s, &r)
+        }
         OutputFormat::Tsv => {
             println!(
                 "seq\telem_start\telem_end\telem_len\tlltr_start\tlltr_end\tlltr_len\trltr_start\trltr_end\trltr_len\tidentity\t\
@@ -1139,7 +1204,7 @@ where
             );
             for ((((((((c, ti), re), ist), dc), dec), &(sc_l, sc_r)), ldh), (pbs_hit, pbs_ed)) in surviving.iter().zip(reext.iter()).zip(internal_stats.iter()).zip(domain_calls.iter()).zip(decisions.iter()).zip(self_cov.iter()).zip(ltr_domain_hits.iter()).zip(pbs_calls.iter()) {
                 let seq_off = seq_starts.get(c.seq_num).copied().unwrap_or(0);
-                let seq_end = seq_starts.get(c.seq_num + 1).map(|&s| s - 1).unwrap_or(text.len() - 1);
+                let seq_end = seq_last(c.seq_num);
                 let rel1 = |abs: usize| abs - seq_off + 1;
                 let (l1s, l1e, l2s, l2e, sim) = match re {
                     Some(r) => (r.left_ltr_start, r.left_ltr_end, r.right_ltr_start, r.right_ltr_end, r.identity),
@@ -1148,7 +1213,7 @@ where
                 let tsd = features::tsd_or_mm1(&text, l1s, l2e, seq_off, seq_end, 4, 20, 1);
                 let motif = features::motif_at(&text, l1s, l2e);
                 let (ppt_n, ppt_off) = features::ppt(&text, l2s, seq_off);
-                let pbs_off = pbs_hit.as_ref().map_or(-1, |h| h.offset);
+                let pbs_off = pbs_hit.as_ref().map_or(".".to_string(), |h| h.offset.to_string());
                 let (pbs_trna, pbs_mm, pbs_strand) = match pbs_hit {
                     Some(h) => (h.trnas.join("/"), h.mm12.to_string(), if h.minus { "-" } else { "+" }),
                     None => (".".to_string(), ".".to_string(), "."),
@@ -1285,7 +1350,7 @@ fn write_trna_calls(
                 name, c.start, c.end, if c.minus { '-' } else { '+' }, c.name, c.seq.len(), c.intron_len, c.energy, c.seq,
             )?;
             if let Some(ids) = ids {
-                write!(out, "\t{}", ids.get(c.seq.as_str()).unwrap_or(&"."))?;
+                write!(out, "\t{}", ids.get(c.gene()).unwrap_or(&"."))?;
             }
             writeln!(out)?;
         }
@@ -1339,7 +1404,7 @@ fn write_trna_library(
 /// `--trna-scan`: tRNA genes of every sequence in a FASTA file.
 fn trna_scan_fasta(path: &str, args: &Args) -> Result<()> {
     if args.threads > 0 {
-        rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global().ok();
+        set_threads(args.threads);
     }
     let t0 = std::time::Instant::now();
     let text = std::fs::read(path).with_context(|| format!("reading {}", path))?;
@@ -1367,11 +1432,13 @@ fn trna_scan_fasta(path: &str, args: &Args) -> Result<()> {
 
 // --------------------------------------------------
 fn main() -> Result<()> {
-    let args = Args::parse();
+    let matches = <Args as clap::CommandFactory>::command().get_matches();
+    let args = <Args as clap::FromArgMatches>::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     if let Some(fasta) = &args.trna_scan {
         return trna_scan_fasta(fasta, &args);
     }
-    let st = setup(&args)?;
+    let given = |id: &str| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine);
+    let st = setup(&args, &given)?;
     let text_len = read_text_length(args.sufr.as_deref().context("a SUFR index is required")?)?;
     if text_len < u32::MAX as usize {
         run::<u32>(&args, &st)

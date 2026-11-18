@@ -3,7 +3,7 @@
 # recipe scripts read (drop-in for blastn -task dc-megablast -outfmt "6 <fields>").
 # usage: rmb_ava.sh <query.fa> <db.fa> <max_hsps> <out.tsv> <fields...>
 #   fields: any of qseqid sseqid pident length qstart qend sstart send qlen slen bitscore
-# Env: THREADS (32), RMBLASTN (port binary), WORD (seed word size, 12; 9-16 give the same 80-80 pairs and scores, see runs/aligner_rmb_word), MATRIX (default 20p<GC>g for the db's GC, pick_matrix.sh),
+# Env: THREADS (32), RMBLASTN (the Rust rmblastn; default /usr/local/rmblast/bin/rmblastn), WORD (seed word size, 12; 9-16 give the same 80-80 pairs and scores, see runs/aligner_rmb_word), MATRIX (default 20p<GC>g for the db's GC, pick_matrix.sh),
 #      CHUNK (2000 queries per rmblastn call: --mt-mode 1 holds a call's results in memory until it ends),
 #      MT_MODE (1: split by queries, streamed in input order, the default; rmblastn 3.0.10's --mt-mode 1 can
 #      deadlock, use 3.0.9 or >= 3.0.11, or MT_MODE=0), MIN_PID (drop hits below this pident).
@@ -16,13 +16,15 @@ set -eo pipefail
 Q=$1; DB=$2; MAXH=$3; OUT=$4; shift 4
 # nothing to search (e.g. no multi-element clusters for the flank filter): no hits
 if ! grep -q "^>" "$Q" || ! grep -q "^>" "$DB"; then : > "$OUT"; : > "$OUT.log"; exit 0; fi
-RMB=${RMBLASTN:-$(dirname "$0")/../../../rmblast-port/rmblast/target/release/rmblastn}   # rmblast-port beside LTRHarvest
+RMB=${RMBLASTN:-/usr/local/rmblast/bin/rmblastn}   # the installed release; never a development checkout, which a rebuild swaps mid-run
 MATRIX=${MATRIX:-$(bash "$(dirname "$0")/pick_matrix.sh" "$DB")}
-CH=$(mktemp -d "$OUT.chunks.XXXX")
+CH=$(mktemp -d "$OUT.chunks.XXXX"); trap 'rm -rf "$CH"' EXIT   # also when a chunk's search fails
+# time and peak memory per chunk go to the log where GNU time is installed
+timed() { local tag=$1; shift; if [ -x /usr/bin/time ]; then /usr/bin/time -f "chunk $tag %e s %M KB" -a -o "$OUT.log" "$@"; else "$@"; fi; }
 awk -v n=${CHUNK:-2000} -v d="$CH" '/^>/{if (k++ % n == 0) f = sprintf("%s/q%05d.fa", d, k / n)} {print > f}' "$Q"
 : > "$OUT"; : > "$OUT.log"
 for qf in "$CH"/q*.fa; do
-/usr/bin/time -f "chunk $(basename $qf) %e s %M KB" -a -o "$OUT.log" \
+timed "$(basename "$qf")" \
 "$RMB" --query "$qf" --db "$DB" --matrix "$MATRIX" --gapopen 24 --gapextend 6 --word-size ${WORD:-12} \
   --xdrop-ungap 450 --xdrop-gap 112 --xdrop-gap-final 225 --min-raw-gapped-score 225 --evalue 1e-10 \
   --complexity-adjust --dust no --mask-level -1 --num-threads ${THREADS:-32} --mt-mode ${MT_MODE:-1} \
@@ -41,4 +43,3 @@ $1 != cq { cq = $1; delete seen }
   print line
 }' >> "$OUT"
 done
-rm -r "$CH"

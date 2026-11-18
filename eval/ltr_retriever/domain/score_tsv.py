@@ -20,7 +20,10 @@ rm, tsv = sys.argv[1], sys.argv[2]
 feat = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != '-' else None
 selftsv = sys.argv[4] if len(sys.argv) > 4 else None
 
-def isint(n): return n.endswith(('-int', '_I', '-I', '_int', 'I')) or '_INT' in n
+# a bare trailing I names an internal in Repbase libraries (ATCOPIA19I), but not where the annotation marks
+# internals with -int (RepeatMasker's libraries: MLT1I is an LTR)
+BARE_I = truth_loose.bare_i(rm)
+def isint(n): return n.endswith(('-int', '_I', '-I', '_int')) or '_INT' in n or (BARE_I and n.endswith('I'))
 truth_loose.isint = isint  # rice names its internals *_INT_*
 
 def strict(rm):

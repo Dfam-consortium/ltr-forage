@@ -134,9 +134,21 @@ pub struct TrnaCall {
     /// The gene as ARAGORN prints it (intron included), upper case, '.' for
     /// non-ACGT, on the gene's strand.
     pub seq: String,
+    /// Bases at the end of `seq` (and of the coordinates) that lie after the
+    /// discriminator: ARAGORN extends the gene over a genomic C, CC or CCA
+    /// there (0 to 3).  `gene()` is the sequence without them.
+    pub tail_ext: usize,
 }
 
 impl TrnaCall {
+    /// The gene up to its discriminator base: `seq` without the C / CC / CCA
+    /// that ARAGORN adds when the genome happens to continue that way.  The
+    /// mature tRNA's CCA is added after transcription, so this is the part
+    /// the 3' end is built from whether or not the genome encodes the tail.
+    pub fn gene(&self) -> &str {
+        &self.seq[..self.seq.len() - self.tail_ext.min(self.seq.len())]
+    }
+
     /// Amino acid ("Met") when the name is a plain `tRNA-Xxx(nnn)`.
     pub fn amino_acid(&self) -> Option<&str> {
         let rest = self.name.strip_prefix("tRNA-")?;
@@ -214,6 +226,8 @@ struct Detection {
     nintron: i64,
     name: String,
     seq: String,
+    /// bases of `seq` after the discriminator (`aatail`'s extension)
+    tail_ext: usize,
 }
 
 /// Base code at window index `i`.  The search only reads inside the window
@@ -523,6 +537,7 @@ fn ti_genedetected(s: &[u8], te: &mut Gene, wstart: i64, minus: bool, out: &mut 
         nintron: te.nintron,
         name: trna_name(&spliced, te.anticodon, te.cloop),
         seq: printed,
+        tail_ext: (aext - 1).max(0) as usize,
     });
 }
 
@@ -1268,6 +1283,7 @@ pub fn scan_sequence(seq: &[u8], maxintronlen: i64) -> Vec<TrnaCall> {
             energy: d.energy,
             intron_len: d.nintron,
             seq: d.seq,
+            tail_ext: d.tail_ext,
         })
         .collect()
 }
@@ -1301,6 +1317,23 @@ mod tests {
         let c = scan_sequence(TYR.as_bytes(), 0);
         assert_eq!((c[0].name.as_str(), c[0].intron_len), ("tRNA-?(Tyr|Leu)(gtag)", 0));
         assert_eq!(c[0].amino_acid(), None);
+    }
+
+    #[test]
+    fn genomic_c_after_the_gene_is_not_gene() {
+        // the three bases after the discriminator (TAA) changed to CAA, CCT and CCA: ARAGORN
+        // reports the gene 1, 2 and 3 bases longer; gene() stays the 73 bases
+        assert_eq!(&MET[133..136], "TAA");
+        for (k, after) in ["CAA", "CCT", "CCA"].iter().enumerate() {
+            let s = format!("{}{}{}", &MET[..133], after, &MET[136..]);
+            let c = scan_sequence(s.as_bytes(), MAXINTRONLEN);
+            assert_eq!(c.len(), 1);
+            assert_eq!((c[0].start, c[0].end, c[0].tail_ext), (61, 134 + k as i64, k + 1), "{after}");
+            assert_eq!(c[0].seq, format!("{}{}", &MET[60..133], &after[..k + 1]));
+            assert_eq!(c[0].gene(), &MET[60..133]);
+        }
+        let c = scan_sequence(MET.as_bytes(), MAXINTRONLEN);
+        assert_eq!((c[0].tail_ext, c[0].gene()), (0, &MET[60..133]));
     }
 
     #[test]

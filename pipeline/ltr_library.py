@@ -87,9 +87,26 @@ import argparse, concurrent.futures, glob, os, random, re, shutil, subprocess, s
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # through symlinks (an LTR_FORAGE_DIR of links)
 ROOT = os.path.dirname(HERE)
-STEPS = ['sample', 'index', 'ltr-forage', 'precluster', 'premodels', 'depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier',
+STEPS = ['sample', 'index', 'ltr-forage', 'polya-family', 'precluster', 'premodels', 'depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier',
          'models', 'mdepth', 'families', 'seeds', 'evidence']
 AVA = 'qseqid sseqid pident length qstart qend sstart send qlen slen bitscore'.split()
+# the options each step's output depends on (argparse names); a finished step is not skipped when one changed
+STEP_OPTIONS = {
+    'sample': ['sample_above', 'sample_frac', 'window_kb', 'seed', 'sample_file', 'min_depth', 'abs_depth'],
+    'index': [],
+    'ltr-forage': ['no_fastan', 'overlaps', 'forage_arg', 'mask_bed'],   # programs and profiles: versions.txt
+    'polya-family': ['polya_family', 'polya_pool', 'no_polya_rescue', 'seed'],
+    'precluster': ['greedy_above', 'greedy_batch', 'greedy_reps', 'word'],
+    'premodels': ['early_tier', 'tier', 'min_cons'],
+    'depth': ['depth_rounds', 'no_depth_remap', 'depth_word'],
+    'nested': ['word'], 'cluster': ['word'], 'flank': ['no_flank'], 'contain': ['word'], 'excise': ['word'], 'pbs': [],
+    'tier': ['tier'],
+    'models': ['min_cons'],
+    'mdepth': ['no_model_depth', 'model_depth_ratio', 'int_copies_max', 'depth_jump_fold', 'depth_word', 'polya_family'],
+    'families': ['word'],
+    'seeds': ['seed_copies'],
+    'evidence': ['evidence_reference'],
+}
 
 
 def tool_version(path, flag='--version'):
@@ -141,9 +158,18 @@ def read_fasta(path):
         yield name, ''.join(seq)
 
 
-def genome_stats(path):
-    total = ns = 0
-    for _, s in read_fasta(path):
+def genome_stats(path, check_names=False):
+    """Total and N bases.  check_names: the genome's sequence names must be unique and free of '#', which
+    separates a library record's name from its class (every helper keys records on name.split('#')[0])."""
+    total = ns = 0; seen = set()
+    for name, s in read_fasta(path):
+        if check_names:
+            if '#' in name:
+                sys.exit(f"ltr_library: sequence name '{name}' in {path} contains '#', which library record names use "
+                         f"as the class separator; rename the sequences (e.g. sed '/^>/s/#/_/g')")
+            if name in seen:
+                sys.exit(f"ltr_library: sequence name '{name}' occurs twice in {path}")
+            seen.add(name)
         total += len(s); ns += s.upper().count('N')
     return total, ns
 
@@ -172,18 +198,32 @@ class Run:
         os.makedirs(os.path.join(self.out, 'elem'), exist_ok=True)
         os.makedirs(os.path.join(self.out, '.done'), exist_ok=True)
         self.env = dict(os.environ, TSV=os.path.join(self.out, 'cand.tsv'), RMBLASTN=a.rmblastn, WORD=str(a.word))
-        if a.from_step:
-            for s in STEPS[STEPS.index(a.from_step):]:
-                p = self.done_path(s)
-                if os.path.exists(p): os.remove(p)
-        # stage A and B outputs from step 12 on don't mix: a rerun keeps the mode its finished steps were made in
+        redo = STEPS[STEPS.index(a.from_step):] if a.from_step else []
+        # stage A and B outputs from step 12 on don't mix: a rerun keeps the mode its finished steps were made in.
+        # Checked before --from removes any marker, so a refused rerun leaves the directory as it was
         mode = 'B' if a.stage_b else 'A'
         mf = self.done_path('mode')
         made = open(mf).read().strip() if os.path.exists(mf) else ('B' if os.path.exists(self.path('reps.fa')) else 'A')
-        later = [s for s in STEPS[STEPS.index('precluster'):] if os.path.exists(self.done_path(s))]
+        later = [s for s in STEPS[STEPS.index('precluster'):] if s not in redo and os.path.exists(self.done_path(s))]
         if later and made != mode:
             sys.exit(f'ltr_library: {self.out} has steps from stage {made} ({later[0]} ...); rerun with '
                      f'{"--stage-a" if made == "A" else "no --stage-a"}, or --from precluster to redo them as stage {mode}')
+        # one genome per outdir: its path, size and modification time are kept with the markers
+        self.genome = os.path.abspath(a.genome)
+        st = os.stat(self.genome)
+        ident = f'{self.genome}\t{st.st_size}\t{st.st_mtime_ns}\n'
+        gf = self.done_path('genome')
+        kept = [s for s in STEPS if s not in redo and os.path.exists(self.done_path(s))]
+        if os.path.exists(gf) and open(gf).read() != ident and kept:
+            was = open(gf).read().rstrip('\n').split('\t')
+            sys.exit(f'ltr_library: {self.out} holds finished steps ({kept[0]} ...) for the genome {was[0]} '
+                     f'({was[1]} bytes); now {self.genome} ({st.st_size} bytes'
+                     f'{", modified since" if was[0] == self.genome and was[1] == str(st.st_size) else ""}). '
+                     f'Use another outdir, or --from sample to redo every step')
+        for s in redo:
+            p = self.done_path(s)
+            if os.path.exists(p): os.remove(p)
+        open(gf, 'w').write(ident)
         open(mf, 'w').write(mode + '\n')
 
     def done_path(self, step): return os.path.join(self.out, '.done', step)
@@ -238,12 +278,26 @@ class Run:
                     os.remove(self.path(f'{base}.{k}.tsv')); os.remove(self.path(f'{base}.{k}.fa'))
         finally: self.env = env
 
+    def signature(self, name):
+        """The options a step's output depends on, one 'option<TAB>value' line each (kept in its done-marker)."""
+        a = self.a
+        return ''.join(f'{k}\t{getattr(a, k)!r}\n' for k in STEP_OPTIONS[name]
+                       if not (k == 'tier' and name == 'premodels' and not a.early_tier))
+
     def step(self, name, title, fn):
-        if os.path.exists(self.done_path(name)):
+        p, sig = self.done_path(name), self.signature(name)
+        if os.path.exists(p):
+            # finished: skipped, unless it was made with other options (markers of older versions are empty)
+            old = dict(l.rstrip('\n').split('\t', 1) for l in open(p) if '\t' in l)
+            new = dict(l.rstrip('\n').split('\t', 1) for l in sig.splitlines())
+            diff = [f'--{k.replace("_", "-")} {old[k]} -> {new[k]}' for k in new if k in old and old[k] != new[k]]
+            if diff:
+                sys.exit(f'ltr_library: step {name} in {self.out} was made with other options ({"; ".join(diff)}). '
+                         f'Rerun with --from {name} to redo it and the steps after it, or with the options it was made with')
             return
         self.log(title)
         fn()
-        open(self.done_path(name), 'w').close()
+        open(p, 'w').write(sig)
 
     # ---- steps -----------------------------------------------------------
     def index(self):
@@ -251,30 +305,47 @@ class Run:
 
     def sample(self):
         a = self.a
-        total, ns = genome_stats(self.genome)
+        total, ns = genome_stats(self.genome, check_names=True)
+        if total == 0:
+            sys.exit(f'ltr_library: no sequence in {self.genome}')
         mb = (total - ns) / 1e6
+        # an earlier run's sample goes first: for a small genome it is a symlink to the genome, which a copy or
+        # a new sample written to the same name would follow and overwrite
+        ds = self.path('depth_sample.fa')
+        if os.path.lexists(ds): os.remove(ds)
         if a.sample_file:
-            frac = genome_stats(a.sample_file)[0] / total; src = os.path.abspath(a.sample_file)
-            shutil.copy(src, self.path('depth_sample.fa'))
+            frac = genome_stats(a.sample_file)[0] / total; src = os.path.abspath(a.sample_file); kind = 'file'
+            shutil.copy(src, ds)
         elif mb <= a.sample_above:
-            frac = 1.0; os.symlink(self.genome, self.path('depth_sample.fa'))
+            frac = 1.0; os.symlink(self.genome, ds); kind = 'genome'
         else:
-            kept = write_sample(self.genome, self.path('depth_sample.fa'), a.sample_frac, a.window_kb * 1000, a.seed)
+            kept = write_sample(self.genome, ds, a.sample_frac, a.window_kb * 1000, a.seed); kind = 'windows'
             frac = kept / total
         # depth floors in whole-genome units, scaled with the non-N genome size (rice MSU7,
         # 373 Mb: 50 / 500) and capped at 50: every tuned genome used <= 50, and lotus (708 Mb,
         # uncapped 95 / 950) lost 2 points of precision (90.35 vs 92.36 at 50 / 500) because higher
         # floors trim less; excise_by_depth.py multiplies them by the sample's --scale
-        mind = a.min_depth or min(50, max(5, round(50 * mb / 373)))
-        absd = a.abs_depth or 10 * mind
+        mind = a.min_depth if a.min_depth is not None else min(50, max(5, round(50 * mb / 373)))
+        absd = a.abs_depth if a.abs_depth is not None else 10 * mind
         with open(self.path('sample.txt'), 'w') as fh:
-            fh.write(f'genome_mb\t{mb:.1f}\nn_frac\t{ns / total:.4f}\nscale\t{frac:.4f}\nmin_depth\t{mind}\nabs_depth\t{absd}\n')
+            fh.write(f'genome_mb\t{mb:.1f}\nn_frac\t{ns / total:.4f}\nscale\t{frac:.4f}\nmin_depth\t{mind}\nabs_depth\t{absd}\n'
+                     f'kind\t{kind}\n')
         self.log(f'  genome {mb:.1f} Mb non-N; depth sample {frac:.1%} of the genome; floors {mind} / {absd}')
 
     def params(self):
         return dict(l.rstrip('\n').split('\t') for l in open(self.path('sample.txt')))
 
+    def drop_full_copies(self, restore_lib=False):
+        """Remove early_tier.py's copies of the full raw library (<file>.all), which it otherwise copies back over
+        files a redone step 3 or 12 has just written.  restore_lib: lib.fa, step 12's input, first gets its full
+        copy back (an --early-tier run left it without the dropped singletons)."""
+        full = self.path('lib.fa.all')
+        if restore_lib and os.path.exists(full): shutil.copy(full, self.path('lib.fa'))
+        for f in ('lib.fa', 'exemplar_raw.fa', os.path.join('elem', 'clusters_raw.json')):
+            if os.path.exists(self.path(f + '.all')): os.remove(self.path(f + '.all'))
+
     def ltr_forage(self):
+        self.drop_full_copies()
         self.sh([self.a.ltr_forage, self.sufr, '--library', 'lib.raw.fa', '--threads', self.a.threads,
                  '--domain-hmm', self.a.domain_hmm, '--nail', self.a.nail, '--mmseqs', self.a.mmseqs, '--temp-dir', self.out,
                  '--overlaps', self.a.overlaps, *(['--no-fastan'] if self.a.no_fastan else ['--fastan-out', 'tandem.bed']),
@@ -283,9 +354,17 @@ class Run:
         with open(self.path('lib.raw.fa')) as fi, open(self.path('lib.fa'), 'w') as fo:
             for l in fi: fo.write(l.split()[0] + '\n' if l.startswith('>') else l)
 
+    def polya_family(self):
+        """Step 11b: veto kept elements whose LTRs are copies of the poly-A-terminated repeats ltr-forage vetoed."""
+        self.drop_full_copies(restore_lib=True)
+        self.py('polya_family.py', '.', self.genome, '--min-depth', self.a.polya_family, '--min-pool', self.a.polya_pool, '--seed', self.a.seed,
+                *(['--no-rescue'] if self.a.no_polya_rescue else []), log='polya_family.log', stdout='polya_family.txt')
+        self.log('  ' + open(self.path('polya_family.txt')).read().strip().split('\n')[-1])
+
     def precluster(self):
         if not self.a.stage_b: return
         a = self.a
+        self.drop_full_copies(restore_lib=True)
         if a.greedy_above >= 0:
             self.py('greedy_cluster.py', 'probe', 'lib.fa', '--work', 'greedy_probe', log='precluster.log', stdout='elem/probe.txt')
             proj = float(re.search(r'projected all-vs-all hits: ([0-9.]+) M', open(self.path('elem', 'probe.txt')).read()).group(1))
@@ -430,12 +509,22 @@ class Run:
             for f in glob.glob(self.path(d, 'batches', 'raw*.tsv')): os.remove(f)
 
     def mdepth(self):
+        src = self.polya_cut()
         if self.a.no_model_depth:
-            shutil.copy(self.path('models.nodepth.fa'), self.path('models.fa')); return
-        self.mdepth_passes()
+            shutil.copy(self.path(src), self.path('models.fa')); return
+        self.mdepth_passes(src)
         self.drop_raw_hits('mclean', 'mclean2', 'mclean3')
 
-    def mdepth_passes(self):
+    def polya_cut(self):
+        """The models without what step 11b's sampled poly-A-terminated repeats cover (polya_cut.py); the file the depth
+        check reads."""
+        if not self.a.polya_family or not os.path.exists(self.path('polya_family', 'polya.fa')): return 'models.nodepth.fa'
+        self.py('polya_cut.py', 'models.nodepth.fa', 'polya_family/polya.fa', 'models.polyacut.fa', 'polya_family',
+                '--min-depth', self.a.polya_family, '--cuts', 'polya_family/cuts.tsv', log='mdepth.log', stdout='polya_cut.txt')
+        self.log('  ' + open(self.path('polya_cut.txt')).read().strip().split('\n')[-1])
+        return 'models.polyacut.fa'
+
+    def mdepth_passes(self, src='models.nodepth.fa'):
         p = self.params()
         mtx = subprocess.run(['bash', os.path.join(HERE, 'pick_matrix.sh'), 'depth_sample.fa'], cwd=self.out,
                              capture_output=True, text=True, check=True).stdout.strip()
@@ -447,7 +536,7 @@ class Run:
                 k = n.split('#')[0]
                 if k in reps or core.get(n, '').upper() != s.upper(): fh.write(f'>{k}\n{s}\n')
         self.env['BATCHES'] = str(self.a.threads); self.env['DEPTH_WORD'] = str(self.a.depth_word)
-        self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), 'models.nodepth.fa', 'depth_sample.fa', 'mclean', 1, p['scale'],
+        self.sh(['bash', os.path.join(HERE, 'clean_library_rmb.sh'), src, 'depth_sample.fa', 'mclean', 1, p['scale'],
                  mtx, '--ratio', self.a.model_depth_ratio, '--min-depth', p['min_depth'], '--min-len', 50, '--consensus', 'models.cons.fa'],
                 'mdepth.log', threads=1)
         shutil.copy(self.path('mclean', 'clean.fa'), self.path('models.fa'))
@@ -498,6 +587,7 @@ class Run:
     def seeds(self):
         a = self.a
         os.makedirs(self.path('seeds'), exist_ok=True)
+        for f in glob.glob(self.path('seeds', '*.stk')): os.remove(f)   # a killed run's, numbered by its library's order
         self.search('library.fa', 'depth_sample.fa', 50, 'seeds/hits.tsv', ['qseqid', 'sseqid', 'sstart', 'send', 'bitscore'], 'seeds.log')
         hits = {}
         for l in open(self.path('seeds', 'hits.tsv')):
@@ -520,10 +610,11 @@ class Run:
                 if len(took) == a.seed_copies: break
             pick[r] = took
             for sid, lo, hi in took: want.setdefault(sid, []).append((lo, hi))
-        # the sample's windows are named <sequence>_<0-based start>; the whole genome is a symlink to it
-        whole = os.path.islink(self.path('depth_sample.fa'))
+        # only a sample of the genome's windows names them <sequence>_<0-based start>; the whole genome and a
+        # --sample-file keep their own names (sample.txt of older runs has no kind: a symlink is the genome)
+        kind = self.params().get('kind', 'genome' if os.path.islink(self.path('depth_sample.fa')) else 'windows')
         def where(sid, lo, hi):
-            m = None if whole else re.match(r'^(.*)_(\d+)$', sid)
+            m = re.match(r'^(.*)_(\d+)$', sid) if kind == 'windows' else None
             return f'{m.group(1)}:{int(m.group(2)) + lo}-{int(m.group(2)) + hi}_+' if m else f'{sid}:{lo}-{hi}_+'
         # a copy with 20 bp either side, named by the range taken (Smitten, 1-based)
         PAD = 20
@@ -547,6 +638,7 @@ class Run:
         if not fixed:
             self.log('  te-composer has no --fixed-cons (needs >= 0.6.8): one-row seed alignments')
         lib = dict(read_fasta(self.path('library.fa')))
+        failed = []
         def one(i, r):
             ident = r.split('#')[0]; out = self.path('seeds', f'{i}.stk')
             if fixed and pick[r]:
@@ -556,10 +648,11 @@ class Run:
                     for k in pick[r]:
                         fh.write('>%s\n%s\n' % seqs[k])
                 with open(self.path('logs', 'seeds.log'), 'a') as lf:
-                    subprocess.run([a.te_composer, '--silent', '--fixed-cons', cons, '--name', ident, '--threads', '1', inst, out],
-                                   stdout=lf, stderr=lf)
+                    rc = subprocess.run([a.te_composer, '--silent', '--fixed-cons', cons, '--name', ident, '--threads', '1', inst, out],
+                                        stdout=lf, stderr=lf).returncode
                 os.remove(cons); os.remove(inst)
-                if os.path.exists(out) and os.path.getsize(out): return len(pick[r])
+                if rc == 0 and os.path.exists(out) and os.path.getsize(out): return len(pick[r])
+                if rc: failed.append(ident)
             with open(out, 'w') as fh:   # the record alone
                 fh.write(f'# STOCKHOLM 1.0\n#=GF ID {ident}\n#=GF SQ 1\n{ident} {lib[r]}\n#=GC RF {lib[r]}\n//\n')
             return 0
@@ -571,6 +664,9 @@ class Run:
                 os.remove(self.path('seeds', f'{i}.stk'))
         self.log(f'  {len(recs)} seed alignments: {sum(1 for n in rows if n)} from genome copies ({sum(rows)} rows), '
                  f'{len(lone)} from the origin element alone, {sum(1 for n in rows if not n)} one-row')
+        if failed:
+            self.log(f'  te-composer failed on {len(failed)} record(s), left as one-row alignments ({", ".join(failed[:5])}'
+                     f'{" ..." if len(failed) > 5 else ""}); see logs/seeds.log')
 
     def evidence(self):
         a = self.a
@@ -583,14 +679,15 @@ class Run:
 
     def run(self):
         a = self.a
-        self.genome = os.path.abspath(a.genome)
         if a.sufr_index:
             self.sufr = os.path.abspath(a.sufr_index); open(self.done_path('index'), 'w').close()
         else:
             self.sufr = self.path('genome.sufr')
         t0 = time.time()
         self.log('ltr_library.py ' + ' '.join(sys.argv[1:]))
-        with open(self.path('versions.txt'), 'w') as fh:   # what this run used, for reproducing it
+        # what each run in this outdir used, for reproducing it: one block per invocation, the newest last
+        with open(self.path('versions.txt'), 'a') as fh:
+            fh.write(f'# {time.strftime("%Y-%m-%d %H:%M:%S")}\n')
             fh.write('command\t' + ' '.join([os.path.abspath(sys.argv[0])] + sys.argv[1:]) + '\n')
             fh.write(f'genome\t{self.genome}\nsufr_index\t{self.sufr}\ndomain_hmm\t{os.path.abspath(a.domain_hmm)}\n')
             for k, p, flag in (('ltr-forage', a.ltr_forage, '--version'), ('rmblastn', a.rmblastn, '-version'), ('nail', a.nail, '--version'),
@@ -599,6 +696,13 @@ class Run:
         self.step('sample', '0 depth sample', self.sample)
         self.step('index', '1 index (sufr)', self.index)
         self.step('ltr-forage', '1-11 ltr-forage', self.ltr_forage)
+        self.step('polya-family', '11b poly-A family veto', self.polya_family)
+        if os.path.getsize(self.path('lib.fa')) == 0:
+            # nothing kept: an empty library is the result, not an error in a later step
+            for f in ('library.fa', 'library.stk'): open(self.path(f), 'w').close()
+            open(self.path('families.tsv'), 'w').write('family\tnew_name\torigin\tkind\tlen\tstatus\tclass\n')
+            self.log(f'done: ltr-forage kept no element; 0 records, 0 families ({(time.time() - t0) / 60:.1f} min)')
+            return
         if a.stage_b:
             self.step('precluster', '12 pre-clustering (raw library)', self.precluster)
             self.step('premodels', f'13 consensus representatives (raw clusters >= {a.min_cons})', self.premodels)
@@ -670,6 +774,14 @@ def main():
                         'nothing: the last round\'s cuts are applied to its hits (alignments clipped, rescored, joined '
                         'across a cut), which is close to the searched rounds but not identical')
     m.add_argument('--depth-word', type=int, default=9, help='rmblastn seed word size of the step 14 and 22b depth searches (9, as RepeatMasker)')
+    m.add_argument('--polya-family', type=int, default=10, metavar='N',
+                   help="veto a kept element when half of each LTR is covered by N of 2,000 sampled LTRs of poly-A-vetoed candidates (10; 0: off)")
+    m.add_argument('--polya-pool', type=int, default=2000, metavar='N',
+                   help="run the poly-A family veto (and the poly-A repeat cut) only when ltr-forage vetoed at least N candidates for poly-A "
+                        "tails, not counting those with an LTR domain hit (2000: the sample is then always full).  Not measured: genomes "
+                        "with 80 to 17,000 such candidates; the step's log line gives the count")
+    m.add_argument('--no-polya-rescue', action='store_true',
+                   help="do not keep again the elements that lost the overlap choice only to elements the poly-A family veto removes")
     m.add_argument('--early-tier', action='store_true', help="drop raw singletons the tier would reject before step 14")
     m.add_argument('--seed-copies', type=int, default=50, help='genome copies per seed alignment in library.stk (50)')
     m.add_argument('--int-copies-max', type=float,
@@ -689,15 +801,26 @@ def main():
     t.add_argument('--te-composer', dest='te_composer')
     t.add_argument('--nail')
     t.add_argument('--mmseqs')
-    t.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(ROOT, 'data', 'TEfam.hmm')),
-                   help="protein profiles for ltr-forage's domain search (default: LTR_retriever's TEfam.hmm, shipped in data/)")
+    t.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(ROOT, 'data', 'TEdomains.hmm')),
+                   help="protein profiles for ltr-forage's domain search (default: data/TEdomains.hmm, 122 Pfam profiles with their "
+                        "class, see data/domains/README.md; data/TEfam.hmm is LTR_retriever's file)")
     t.add_argument('--word', type=int, default=16, help='rmblastn seed word for the library all-vs-all (16; 12 gave the same '
                    'scores within 0.05 points on rice, lotus and mouse, with step 12 up to 2x slower)')
     a = ap.parse_args()
+    if not os.path.isfile(a.genome):
+        sys.exit(f'ltr_library: genome not found: {a.genome}')
+    with open(a.genome, 'rb') as fh:
+        if fh.read(2) == b'\x1f\x8b':
+            sys.exit(f'ltr_library: {a.genome} is gzip-compressed; the genome must be an uncompressed FASTA file')
+    if a.early_tier and (a.stage_a or a.min_cons < 2):
+        sys.exit('ltr_library: --early-tier drops raw singletons of the step 12 pre-clustering, which --stage-a and '
+                 '--min-cons below 2 skip')
     if a.int_copies_max is None: a.int_copies_max = 2000 if a.early_tier else 0
     if not a.sufr_index:
-        idx = re.sub(r'\.(fa|fasta|fna)(\.gz)?$', '', a.genome) + '.sufr'
-        if os.path.isfile(idx): a.sufr_index = idx
+        idx = re.sub(r'\.(fa|fasta|fna)$', '', a.genome) + '.sufr'
+        if os.path.isfile(idx):
+            if os.path.getmtime(idx) >= os.path.getmtime(a.genome): a.sufr_index = idx
+            else: print(f'ltr_library: not using {idx}: it is older than the genome (--sufr {idx} to use it anyway)', file=sys.stderr)
     a.ltr_forage = find_tool(a.ltr_forage, 'LTRFORAGE', 'ltr-forage', [os.path.join(ROOT, 'target', 'release', 'ltr-forage')])
     a.rmblastn = find_tool(a.rmblastn, 'RMBLASTN', 'rmblastn',
                            ['/usr/local/rmblast/bin/rmblastn', os.path.join(ROOT, '..', '..', 'rmblast-port', 'rmblast', 'target', 'release', 'rmblastn')],
@@ -716,6 +839,7 @@ def main():
         a.sufr = find_tool(a.sufr, 'SUFR', 'sufr', [os.path.join(ROOT, '..', 'sufr', 'target', 'release', 'sufr')])
     if not os.path.isfile(a.domain_hmm):
         sys.exit(f'ltr_library: domain HMM file not found: {a.domain_hmm} (give --domain-hmm)')
+    a.domain_hmm = os.path.abspath(a.domain_hmm)   # the steps run in the output directory
     Run(a).run()
 
 

@@ -44,17 +44,27 @@ for l in open(a.lib):
     else: seq[n].append(l.strip())
 seq = {k: ''.join(v) for k, v in seq.items()}
 kind = lambda r: 'INT' if r.endswith('_INT') else 'LTR'
-# element of each record: an INT named <seq>:<s>..<e>_INT belongs to the LTR record that
-# ends at s-1 on the same sequence (tier.py keeps the 5' LTR); otherwise it stands alone
-import re
+# element of each record.  With --cand: the kept element of the ltr-forage table one of whose records (5' LTR,
+# internal region, 3' LTR) has this name, which also gives the element's superfamily.  Otherwise, and for a
+# record the table does not name: an INT named <seq>:<s>..<e>_INT belongs to the LTR record that ends at s-1
+# on the same sequence (tier.py keeps the 5' LTR), and any other record stands alone.
+import re, csv
 pos = lambda r: re.match(r'(.+):(\d+)\.\.(\d+)_', r).groups()
+rec_elem = {}; sf = {}
+if a.cand:
+    for x in csv.DictReader(open(a.cand), delimiter='\t'):
+        if x['keep'] != '1': continue
+        c = x['seq']; e = f"{c}:{x['elem_start']}..{x['elem_end']}"; sf[e] = x['dom_superfamily']
+        ls, le, rs, re_ = int(x['lltr_start']), int(x['lltr_end']), int(x['rltr_start']), int(x['rltr_end'])
+        for nm in (f'{c}:{ls}..{le}_LTR', f'{c}:{le + 1}..{rs - 1}_INT', f'{c}:{rs}..{re_}_LTR'): rec_elem.setdefault(nm, e)
 ltr_end = {}
 for r in order:
     if kind(r) == 'LTR': c, s, e = pos(r); ltr_end[(c, int(e))] = r
 e_of = {}
 for r in order:
-    if kind(r) == 'LTR': e_of[r] = r
-    else: c, s, e = pos(r); e_of[r] = ltr_end.get((c, int(s) - 1), r)
+    if r in rec_elem: e_of[r] = rec_elem[r]
+    elif kind(r) == 'LTR': e_of[r] = r
+    else: c, s, e = pos(r); l = ltr_end.get((c, int(s) - 1), r); e_of[r] = rec_elem.get(l, l)
 
 def union(iv):
     iv = sorted(iv); t = 0; cs = ce = None
@@ -134,13 +144,9 @@ for pair, kinds in passed.items():
         par[find(x)] = find(y)
 fam = collections.defaultdict(list)
 for r in order: fam[find(e_of[r])].append(r)
-# family class from the elements' domain superfamily (element key = 5' LTR start)
-sf = {}
-if a.cand:
-    import csv
-    sf = {(r['seq'], int(r['lltr_start'])): r['dom_superfamily'] for r in csv.DictReader(open(a.cand), delimiter='\t')}
+# family class from the domain superfamily of the family's elements (kept rows of the table only)
 def fam_class(recs):
-    votes = collections.Counter(sf.get((pos(e)[0], int(pos(e)[1]))) for e in {e_of[r] for r in recs} if kind(e) == 'LTR')
+    votes = collections.Counter(sf.get(e) for e in {e_of[r] for r in recs})
     gc = {k: v for k, v in votes.items() if k in ('Gypsy', 'Copia')}
     if gc:
         k, v = max(gc.items(), key=lambda x: x[1])
@@ -149,7 +155,8 @@ def fam_class(recs):
 # within-family near-duplicate removal, longest first
 covered = lambda r, by: union((covd.get((r, by)) or [[], []])[0] + (covd.get((by, r)) or [[], []])[1]) / L[r]
 out = open(a.out, 'w'); tsv = open(a.tsv, 'w'); tsv.write('family\tnew_name\torigin\tkind\tlen\tstatus\tclass\n')
-fams = sorted(fam.values(), key=lambda v: order.index(v[0]))
+rank = {r: i for i, r in enumerate(order)}
+fams = sorted(fam.values(), key=lambda v: rank[v[0]])
 nkept = 0
 ncls = collections.Counter()
 for i, recs in enumerate(fams, 1):

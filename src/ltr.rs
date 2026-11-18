@@ -39,17 +39,6 @@ pub struct LtrCandidate {
     pub similarity: f64,
 }
 
-impl LtrCandidate {
-    /// Length of the left LTR in bp.
-    pub fn ltr_len(&self) -> usize {
-        self.left_ltr_end - self.left_ltr_start + 1
-    }
-    /// Distance between the 5′ ends of the two LTRs (= offset / inter-LTR span).
-    pub fn ltr_distance(&self) -> usize {
-        self.right_ltr_start - self.left_ltr_start
-    }
-}
-
 // --------------------------------------------------
 /// Return the sequence index that contains `pos`, using the sorted
 /// `sequence_starts` slice (binary search).
@@ -66,7 +55,6 @@ pub fn filter_seed(
     pos1: usize,
     pos2: usize,
     len: usize,
-    _lmin: usize,
     lmax: usize,
     dmin: usize,
     dmax: usize,
@@ -198,9 +186,11 @@ pub fn extend_seed(
     let max_ext = lmax.saturating_sub(seed.len);
 
     let seq_start = sequence_starts[seed.seq_num];
+    // One past the sequence's last base: the separator before the next sequence, or the
+    // terminator that ends the text.  Used as an exclusive end below.
     let seq_end = sequence_starts
         .get(seed.seq_num + 1)
-        .map(|&s| s - 1)         // last valid position (before next seq's separator)
+        .map(|&s| s - 1)
         .unwrap_or(text.len() - 1);
 
     // ---- Left (backward) extension ----

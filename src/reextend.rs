@@ -156,11 +156,6 @@ fn trim_ends(q: &[u8], s: &[u8], window: usize, matches: usize) -> Option<(usize
     Some((bases(&q[..left]), bases(&s[..left]), bases(&q[right..]), bases(&s[right..])))
 }
 
-/// Re-extend one candidate.  `seq_start` and `seq_end` bound the sequence
-/// the candidate lies in (absolute, inclusive).  Returns None when no
-/// plus-strand HSP scores above the cutoff, in which case the caller keeps
-/// the X-drop boundaries.
-#[allow(clippy::too_many_arguments)]
 /// Fraction of `seq` covered by plus-strand alignments of the sequence
 /// against itself off the main diagonal.  A satellite array or a
 /// microsatellite aligns to itself shifted by one period, so its coverage is
@@ -184,6 +179,11 @@ pub fn self_repeat_cov(aligner: &Aligner, seq: &[u8]) -> f64 {
     covered.iter().filter(|&&c| c).count() as f64 / seq.len() as f64
 }
 
+/// Re-extend one candidate.  `seq_start` and `seq_end` are the first and last
+/// base of the sequence the candidate lies in (absolute, inclusive).  Returns
+/// None when no plus-strand HSP scores above the cutoff, in which case the
+/// caller keeps the X-drop boundaries.
+#[allow(clippy::too_many_arguments)]
 pub fn reextend(
     aligner: &Aligner,
     cfg: &ReextendConfig,

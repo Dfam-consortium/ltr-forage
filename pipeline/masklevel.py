@@ -357,26 +357,51 @@ def main():
         return remap(sys.argv[2], sys.argv[3], *map(int, sys.argv[4:7]), *sys.argv[7:10])
     assert mode == 'filter', __doc__
     hits_f, db_f, q_f, level = sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+    return filter_hits(hits_f, db_f, q_f, level, sys.stdout)
+
+
+def filter_hits(hits_f, db_f, q_f, level, out):
+    """The mask-level filter, one query at a time.  Pass 1 indexes where each query's hits lie in hits_f (a file
+    is one search's hits, grouped by query, or several searches concatenated, so a query has one block per
+    search); pass 2 reads and filters one query's blocks at a time and marks its survivors; pass 3 prints them
+    in input order.  Memory is one query's hits and one bit per hit, not every hit of the batch (gorilla,
+    2026-11-16: ten batches of 56 M hits each, held whole, ran a 125 GB machine out of memory)."""
+    if level >= 100:
+        with open(hits_f, 'rb') as fh:
+            for line in fh:
+                out.write(strip_rows(line.decode()))
+        return
     oid = {n: i for i, n in enumerate(names_and_lengths(db_f)[0])}
     qlen = names_and_lengths(q_f)[1]
-    by_q = {}
-    with open(hits_f) as fh:
-        for i, line in enumerate(fh):
-            f = line.split('\t')
-            score, q, qs1, qe, s, a, b, strand = int(f[0]), f[1], int(f[2]), int(f[3]), f[4], int(f[5]), int(f[6]), f[7].strip()
-            qs = qs1 - 1
-            ss, se = min(a, b) - 1, max(a, b)
-            minus = strand == 'minus'
-            L = qlen[q]
-            qoff, qend = (L - qe, L - qs) if minus else (qs, qe)
-            key = (-score, -oid[s], ss, -se, qoff, -qend)
-            sq, eq = (qs + 1, qe + 1) if minus else (qs, qe)
-            by_q.setdefault(q, []).append((key, sq, eq, score, i))
-    keep = set()
-    if level >= 100:
-        keep = None
-    else:
-        for q, hs in by_q.items():
+    blocks = {}                               # query -> [(byte offset, first line number, line count)]
+    n = 0
+    with open(hits_f, 'rb') as fh:
+        cur, off, first, pos = None, 0, 0, 0
+        for line in fh:
+            q = line.split(b'\t', 2)[1]
+            if q != cur:
+                if cur is not None:
+                    blocks.setdefault(cur, []).append((off, first, n - first))
+                cur, off, first = q, pos, n
+            pos += len(line); n += 1
+        if cur is not None:
+            blocks.setdefault(cur, []).append((off, first, n - first))
+    keep = bytearray(n)
+    with open(hits_f, 'rb') as fh:
+        for qb, bl in blocks.items():
+            q = qb.decode(); L = qlen[q]
+            hs = []
+            for off, first, cnt in bl:
+                fh.seek(off)
+                for k in range(cnt):
+                    f = fh.readline().decode().split('\t')
+                    score, qs1, qe, s, a, b, strand = int(f[0]), int(f[2]), int(f[3]), f[4], int(f[5]), int(f[6]), f[7].strip()
+                    qs = qs1 - 1
+                    ss, se = min(a, b) - 1, max(a, b)
+                    minus = strand == 'minus'
+                    qoff, qend = (L - qe, L - qs) if minus else (qs, qe)
+                    sq, eq = (qs + 1, qe + 1) if minus else (qs, qe)
+                    hs.append(((-score, -oid[s], ss, -se, qoff, -qend), sq, eq, score, first + k))
             hs.sort(key=lambda h: h[0])
             acc, starts, maxspan = [], [], 0
             for _, qs, qe, sc, i in hs:
@@ -401,14 +426,16 @@ def main():
                     p = bisect_left(starts, qs)
                     starts.insert(p, qs); acc.insert(p, (qs, qe, sc))
                     maxspan = max(maxspan, span)
-                    keep.add(i)
-    out = sys.stdout
-    with open(hits_f) as fh:
+                    keep[i] = 1
+    with open(hits_f, 'rb') as fh:
         for i, line in enumerate(fh):
-            if keep is None or i in keep:
-                if line.count('\t') > 7: line = '\t'.join(line.split('\t')[:8]) + '\n'   # no alignment rows
-                out.write(line)
+            if keep[i]:
+                out.write(strip_rows(line.decode()))
 
+
+def strip_rows(line):
+    """A hit without its alignment rows (qseq sseq): the filtered hits are the 8-column format."""
+    return '\t'.join(line.split('\t')[:8]) + '\n' if line.count('\t') > 7 else line
 
 if __name__ == '__main__':
     main()

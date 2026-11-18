@@ -107,6 +107,9 @@ fn main() -> Result<()> {
     if a.len() != 4 {
         anyhow::bail!("usage: kmer_depth <genome.sufr> <library.fa> <k>");
     }
-    let k: usize = a[3].parse()?;
+    let k: usize = a[3].parse().with_context(|| format!("k: {}", a[3]))?;
+    if k == 0 {
+        anyhow::bail!("k must be at least 1");
+    }
     if read_text_length(&a[1])? < u32::MAX as usize { run::<u32>(&a[1], &a[2], k) } else { run::<u64>(&a[1], &a[2], k) }
 }

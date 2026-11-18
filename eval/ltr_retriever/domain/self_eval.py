@@ -1,12 +1,13 @@
 import csv, sys, collections, os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import truth_loose
-def isint(n): return n.endswith(('-int','_I','-I','_int','I')) or '_INT' in n
+def isint(n): return n.endswith(('-int','_I','-I','_int')) or '_INT' in n or (BARE_I and n.endswith('I'))
 truth_loose.isint = isint
 ns = {'collections': collections, 'isint': isint}
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'score_tsv.py')).read()
 exec(src[src.index('def strict'):src.index('hit_s = ')], ns)
 rm, selftsv, m4tsv = sys.argv[1], sys.argv[2], sys.argv[3]
+BARE_I = truth_loose.bare_i(rm)   # False where the annotation marks internals with -int (MLT1I is an LTR)
 hit_s = truth_loose.scorer(ns['strict'](rm)); hit_l = truth_loose.scorer(truth_loose.build(rm))
 cov = {}
 for r in csv.DictReader(open(selftsv), delimiter='\t'):

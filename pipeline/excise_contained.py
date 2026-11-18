@@ -9,10 +9,12 @@ Only internal records are cut, and a cut that would remove more than --max-frac 
 record is skipped (that is redundancy, which containment handles, not nesting).
 Records shorter than --min-len after cutting are dropped.
 
-usage: excise_contained.py <lib.fa> <clusters.json> <hits.tsv> <out.fa> <cuts.tsv>
+usage: excise_contained.py <lib.fa> <clusters.json> <hits.tsv> <out.fa> <cuts.tsv>   (env TSV as in step4.py)
 hits.tsv: blastn -outfmt '6 qseqid sseqid pident length qstart qend sstart send qlen slen'
 """
-import sys, re, json, collections, argparse
+import sys, os, json, collections, argparse
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from records import element_lookup, is_int, is_ltr
 ap = argparse.ArgumentParser()
 for x in ('lib', 'clusters', 'hits', 'out', 'cuts'): ap.add_argument(x)
 ap.add_argument('--int-cov', type=float, default=0.95)
@@ -28,30 +30,25 @@ for l in open(a.lib):
     else: seqs[n].append(l.strip())
 seqs = {k: ''.join(v) for k, v in seqs.items()}
 clus = json.load(open(a.clusters))
-by = collections.defaultdict(list)
-for e, c in clus.items():
-    m = re.match(r'(\S+):(\d+)\.\.(\d+)', e); by[m[1]].append((int(m[2]), int(m[3]), c))
-def cl(r):
-    m = re.match(r'(\S+):(\d+)\.\.(\d+)_', r)
-    for x, y, c in by[m[1]]:
-        if x <= int(m[2]) and int(m[3]) <= y: return c
-rc = {r: cl(r) for r in order}
+# record -> cluster, through the record's own element (env TSV: the ltr-forage table)
+elem = element_lookup(clus)
+rc = {r: clus.get(elem(r)) for r in order}
 size = collections.Counter(clus.values())
 # same-family guard: clusters whose LTR records align to each other (>= min-id over half the shorter)
 same = set()
 for l in open(a.hits):
     q, s, pid, ln, qs, qe, ss, se, ql, sl = l.split()[:10]
-    if '_LTR' in q and '_LTR' in s and q in rc and s in rc and rc[q] != rc[s] and float(pid) >= a.min_id \
+    if is_ltr(q) and is_ltr(s) and q in rc and s in rc and rc[q] != rc[s] and float(pid) >= a.min_id \
        and int(ln) >= 0.5 * min(int(ql), int(sl)):
         same.add((rc[q], rc[s])); same.add((rc[s], rc[q]))
 nguard = 0
 cuts = collections.defaultdict(list)
 for l in open(a.hits):
     q, s, pid, ln, qs, qe, ss, se, ql, sl = l.split()[:10]
-    if '_INT' not in s or q not in seqs or s not in seqs or rc[q] == rc[s] or float(pid) < a.min_id: continue
+    if not is_int(s) or q not in seqs or s not in seqs or rc[q] == rc[s] or float(pid) < a.min_id: continue
     cov = (abs(int(qe) - int(qs)) + 1) / int(ql)
-    need = a.int_cov if '_INT' in q else a.ltr_cov
-    if cov >= need and '_INT' in q and (rc[q], rc[s]) in same:
+    need = a.int_cov if is_int(q) else a.ltr_cov
+    if cov >= need and is_int(q) and (rc[q], rc[s]) in same:
         nguard += 1; continue
     if cov >= need:
         cuts[s].append((min(int(ss), int(se)), max(int(ss), int(se)), q))

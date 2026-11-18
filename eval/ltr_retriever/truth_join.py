@@ -6,7 +6,10 @@ for line in open(rm):
     if len(c)<15 or not c[0].isdigit() or not c[10].startswith('LTR'): continue
     ann.append((int(c[5]),int(c[6]),c[8],c[9],float(c[1]),c[10]))
 ann.sort()
-def isint(n): return n.endswith(('-int','_I','-I','_int','I'))
+# a bare trailing I names an internal only in Repbase-named annotations (ATCOPIA19I); where internals are
+# marked -int (RepeatMasker's libraries) it is part of an LTR's name (MLT1I)
+BARE_I = not any(a[3].endswith('-int') for a in ann)
+def isint(n): return n.endswith(('-int','_I','-I','_int')) or (BARE_I and n.endswith('I'))
 truth=[]
 for i,(s1,e1,st1,nm1,dv1,cl1) in enumerate(ann):
     if isint(nm1) or not (100<=e1-s1+1<=1000): continue

@@ -5,13 +5,16 @@
 # word 9, gap 24/6, X-drops 450/112/225, minscore 225; matrix = 20p<GC>g for the genome's GC),
 # except that the port applies mask level 80 itself instead of RepeatMasker's 101 + Perl filter; split into
 # BATCHES query batches run in parallel, against the current library; then excise by hit depth.
-# Env: RMBLASTN (port binary), BATCHES (16), THREADS per batch (4; BATCHES x THREADS = cores, as RepeatMasker -pa 16), ROUND1_HITS (reuse for round 1; round 2 then searches the whole library), INCREMENTAL (1), REMAP (0; see below), PREV_RUN (see below), DEPTH_WORD (seed word size, 9 as RepeatMasker).
+# Env: RMBLASTN (the Rust rmblastn; default /usr/local/rmblast/bin/rmblastn), BATCHES (16), FILTER_JOBS (mask-level filters at a time, 4), THREADS per batch (4; BATCHES x THREADS = cores, as RepeatMasker -pa 16), ROUND1_HITS (reuse for round 1; round 2 then searches the whole library), INCREMENTAL (1), REMAP (0; see below), PREV_RUN (see below), DEPTH_WORD (seed word size, 9 as RepeatMasker).
 set -euo pipefail
 lib=$1; sample=$2; out=$3; rounds=$4; scale=$5; matrix=$6; shift 6
 HERE=$(cd "$(dirname "$0")" && pwd)
-# default: a rmblast-port checkout beside the LTRHarvest directory (ltr_library.py always sets RMBLASTN)
-RMB=${RMBLASTN:-$HERE/../../../rmblast-port/rmblast/target/release/rmblastn}
+# default: the installed release, never a development checkout, which a rebuild swaps mid-run
+# (ltr_library.py always sets RMBLASTN)
+RMB=${RMBLASTN:-/usr/local/rmblast/bin/rmblastn}
 B=${BATCHES:-16}; T=${THREADS:-4}
+# a failed batch ends the script: stop the batches still running with it
+trap 'p=$(jobs -p); [ -z "$p" ] || kill $p 2>/dev/null || true' EXIT
 # a fresh batch directory: a rerun with fewer batches would otherwise concatenate the earlier run's extra h*.tsv
 # (mm10, 2026-10-25: a 16-batch rerun of a 24-batch step 22b counted a third of the sample twice)
 rm -rf "$out/batches"; mkdir -p "$out/batches"; cp "$lib" "$out/round0.fa"
@@ -89,12 +92,16 @@ for r in $(seq 1 "$rounds"); do
     else
       run_batches "$cur" 100 raw
     fi
-    raw=1; pids=()
-    for i in $(seq 0 $((B-1))); do
-      python3 "$HERE/masklevel.py" filter "$out/batches/raw$i.tsv" "$cur" "$out/batches/q$i.fa" 80 > "$out/batches/h$i.tsv" &
-      pids+=($!)
+    # FILTER_JOBS filters at a time (default 4): each reads a whole raw batch (gorilla 2026-11-16: 28 GB each)
+    raw=1; FJ=${FILTER_JOBS:-4}
+    for w in $(seq 0 "$FJ" $((B-1))); do
+      pids=()
+      for i in $(seq "$w" $((w+FJ-1 < B-1 ? w+FJ-1 : B-1))); do
+        python3 "$HERE/masklevel.py" filter "$out/batches/raw$i.tsv" "$cur" "$out/batches/q$i.fa" 80 > "$out/batches/h$i.tsv" &
+        pids+=($!)
+      done
+      for p in "${pids[@]}"; do wait "$p" || { echo "clean_library_rmb.sh: masklevel.py failed" >&2; exit 1; }; done
     done
-    for p in "${pids[@]}"; do wait "$p" || { echo "clean_library_rmb.sh: masklevel.py failed" >&2; exit 1; }; done
     for i in $(seq 0 $((B-1))); do cat "$out/batches/h$i.tsv"; done > "$hits"
   else
     run_batches "$cur" 80 h

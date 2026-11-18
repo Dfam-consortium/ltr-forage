@@ -4,8 +4,18 @@ LTR blocks are runs of non-internal LTR-class rows (any names) with gaps <= MERG
 on the same strand; 5'-5' distance 1..20 kb; the partner is the nearest qualifying block."""
 import sys, collections, bisect
 MERGE = 100
-def isint(n): return n.endswith(('-int','_I','-I','_int','I'))
+# a bare trailing I names an internal only in Repbase-named annotations (ATCOPIA19I); where internals are
+# marked -int (RepeatMasker's libraries) it is part of an LTR's name (MLT1I)
+BARE_I = True
+def isint(n): return n.endswith(('-int','_I','-I','_int')) or (BARE_I and n.endswith('I'))
+def bare_i(rm):
+    for line in open(rm):
+        c = line.split()
+        if len(c) >= 15 and c[0].isdigit() and c[10].startswith('LTR') and c[9].endswith('-int'): return False
+    return True
 def build(rm):
+    global BARE_I
+    BARE_I = bare_i(rm)
     ann = collections.defaultdict(list)
     for line in open(rm):
         c = line.split()

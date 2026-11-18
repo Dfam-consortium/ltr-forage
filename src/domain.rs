@@ -13,11 +13,17 @@
 //!
 //! Classification follows LTR_retriever's `annotate_TE.pl`: a candidate is
 //! LTR-order when all its hits are to LTR-class profiles, notLTR when all are
-//! to the not-LTR list, and "mixture" when the hits disagree (a hit outside
-//! both lists counts as disagreement, as in the original).  Superfamily and
-//! strand come from hit counts with the same ratios.
+//! to not-LTR profiles, and "mixture" when the hits disagree (a hit to a
+//! profile of no class counts as disagreement, as in the original).
+//! Superfamily and strand come from hit counts with the same ratios.
+//!
+//! Each profile's class and role come from the profile file itself when it
+//! is annotated (see `ProfileTable`): the NAME carries a RepeatMasker
+//! class, `rve#LTR` or `RVT_2#LTR/Copia`, and the DESC of the LTR
+//! polyprotein domains ends in `[role=core]`.  A file without any class
+//! (LTR_retriever's TEfam.hmm) gets annotate_TE.pl's lists below.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,6 +64,171 @@ const GYPSY: &[&str] = &[
 const COPIA: &[&str] = &[
     "PF07727", "PF13961", "PF14244", "PF03564", "PF13976", "PF14223", "PF08847", "PF14787", "PF13917",
 ];
+
+/// Polyprotein domains of the legacy lists (`CORE_ROLE` in an annotated
+/// file): a hit to one of these inside an LTR means the "LTR" is internal
+/// sequence.  The rest of the LTR list (DUF834 and DUF1263 above all) turns
+/// up inside real LTRs: 748 annotated LTR pairs on rice.
+const CORE: &[&str] = &[
+    "PF00665", "PF13683", // integrase core
+    "PF03732", "PF14223", "PF14244", "PF13976", // gag, gag-pre-integrase
+    "PF07727", // reverse transcriptase (copia)
+    "PF13650", "PF13975", "PF09668", "PF00077", "PF08284", "PF02160", "PF12384", // aspartyl proteases
+    "PF00385", // chromo
+];
+
+// ---------------------------------------------------------------------------
+// Profile classes from the profile file.
+
+/// What a hit to a profile says about the order of the candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Order {
+    Ltr,
+    NotLtr,
+    /// A profile of no class: counts as disagreement.
+    Unclassified,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfileClass {
+    pub order: Order,
+    /// Gypsy or Copia when the class says so ( the only superfamilies the
+    /// call names ), otherwise None.
+    pub superfamily: Option<&'static str>,
+    /// An LTR polyprotein domain: evidence of coding sequence inside an LTR
+    /// and of nesting.
+    pub core: bool,
+}
+
+/// The role tag in a profile's DESC line.
+const CORE_ROLE: &str = "[role=core]";
+
+/// Profile classes by key (the accession without its version, or the NAME
+/// before its '#' for a profile without an ACC line).
+///
+/// An annotated profile file names each profile `<name>#<class>`, the
+/// class as RepeatMasker writes it ( `LTR`, `LTR/Gypsy`, `LTR/Copia`,
+/// `LINE`, `DNA/hAT`, `RC/Helitron` ... ): a type of `LTR` is evidence for
+/// the candidate, any other type evidence against it, and a subtype of
+/// Gypsy or Copia counts toward the superfamily call.  An LTR profile whose
+/// DESC ends in `[role=core]` is a polyprotein domain ( see `nesting` and
+/// the LTR veto in decide.rs ); any other LTR profile is accessory
+/// evidence.  HMMER and nail read both lines unchanged.
+#[derive(Debug, Clone)]
+pub struct ProfileTable {
+    by_key: HashMap<String, ProfileClass>,
+    /// From the file's own classes rather than the legacy lists.
+    pub annotated: bool,
+}
+
+impl ProfileTable {
+    /// annotate_TE.pl's lists, for an unannotated profile file.
+    pub fn legacy() -> Self {
+        let mut by_key = HashMap::new();
+        for (list, order) in [(LTR, Order::Ltr), (NOT_LTR, Order::NotLtr)] {
+            for &a in list {
+                by_key.insert(a.to_string(), ProfileClass { order, superfamily: None, core: false });
+            }
+        }
+        for (list, sf) in [(GYPSY, "Gypsy"), (COPIA, "Copia")] {
+            for &a in list {
+                by_key.entry(a.to_string()).or_insert(ProfileClass { order: Order::Unclassified, superfamily: None, core: false }).superfamily = Some(sf);
+            }
+        }
+        for &a in CORE {
+            if let Some(c) = by_key.get_mut(a) {
+                c.core = true;
+            }
+        }
+        ProfileTable { by_key, annotated: false }
+    }
+
+    /// The table for one profile file and its profiles' (key, name) in file
+    /// order.  Annotated when any NAME carries a class; a profile without
+    /// one in an annotated file is unclassified.
+    pub fn from_hmm(hmm: &str) -> Result<(Self, Vec<(String, String)>)> {
+        struct Rec { name: String, acc: Option<String>, desc: String }
+        let mut recs: Vec<Rec> = Vec::new();
+        let mut cur: Option<Rec> = None;
+        for line in hmm.lines() {
+            let tag = line.split_whitespace().next().unwrap_or("");
+            let rest = line.get(tag.len()..).unwrap_or("").trim();
+            match tag {
+                "NAME" => cur = Some(Rec { name: rest.to_string(), acc: None, desc: String::new() }),
+                "ACC" => if let Some(r) = cur.as_mut() { r.acc = Some(strip_version(rest).to_string()) },
+                "DESC" => if let Some(r) = cur.as_mut() { r.desc = rest.to_string() },
+                _ if tag.starts_with("//") => if let Some(r) = cur.take() { recs.push(r) },
+                _ => {}
+            }
+        }
+        if recs.is_empty() {
+            bail!("no profiles in the profile file");
+        }
+        let annotated = recs.iter().any(|r| r.name.contains('#'));
+        let mut table = if annotated { ProfileTable { by_key: HashMap::new(), annotated } } else { Self::legacy() };
+        let mut keys = Vec::new();
+        let mut unclassified = Vec::new();
+        for r in &recs {
+            let (stem, class) = match r.name.split_once('#') { Some((n, c)) => (n, Some(c)), None => (r.name.as_str(), None) };
+            let key = r.acc.clone().unwrap_or_else(|| stem.to_string());
+            if keys.iter().any(|(k, _): &(String, String)| *k == key) {
+                bail!("profile {} appears twice in the profile file", key);
+            }
+            if annotated {
+                let core = r.desc.ends_with(CORE_ROLE);
+                if r.desc.contains("[role=") && !core {
+                    bail!("profile {}: the only role tag is {} at the end of DESC (got '{}')", r.name, CORE_ROLE, r.desc);
+                }
+                let pc = match class {
+                    None => {
+                        unclassified.push(r.name.clone());
+                        ProfileClass { order: Order::Unclassified, superfamily: None, core: false }
+                    }
+                    Some(c) => {
+                        let (ty, sub) = c.split_once('/').unwrap_or((c, ""));
+                        if ty.is_empty() || c.contains(char::is_whitespace) {
+                            bail!("profile {}: bad class '{}'", r.name, c);
+                        }
+                        let order = if ty == "LTR" { Order::Ltr } else { Order::NotLtr };
+                        if core && order != Order::Ltr {
+                            bail!("profile {}: {} on a profile of class {} ( only LTR profiles are core )", r.name, CORE_ROLE, c);
+                        }
+                        let superfamily = match (order, sub) { (Order::Ltr, "Gypsy") => Some("Gypsy"), (Order::Ltr, "Copia") => Some("Copia"), _ => None };
+                        ProfileClass { order, superfamily, core }
+                    }
+                };
+                table.by_key.insert(key.clone(), pc);
+            }
+            keys.push((key, stem.to_string()));
+        }
+        if !unclassified.is_empty() {
+            eprintln!("[8b protein domains] warning: {} profile(s) without a class count as disagreement: {}",
+                      unclassified.len(), unclassified.join(", "));
+        }
+        Ok((table, keys))
+    }
+
+    pub fn get(&self, key: &str) -> Option<&ProfileClass> {
+        self.by_key.get(key)
+    }
+}
+
+/// `PF00665.27` -> `PF00665`; a name without a numeric version unchanged.
+fn strip_version(acc: &str) -> &str {
+    match acc.rsplit_once('.') {
+        Some((a, v)) if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) => a,
+        _ => acc,
+    }
+}
+
+/// The table of the run's profile file, set by `search`; the legacy lists
+/// before that (and in unit tests).
+static TABLE: std::sync::OnceLock<ProfileTable> = std::sync::OnceLock::new();
+static LEGACY: std::sync::LazyLock<ProfileTable> = std::sync::LazyLock::new(ProfileTable::legacy);
+
+pub fn table() -> &'static ProfileTable {
+    TABLE.get().unwrap_or(&LEGACY)
+}
 
 
 // ---------------------------------------------------------------------------
@@ -137,21 +308,6 @@ pub fn find_program(name: &str) -> Result<PathBuf> {
         .with_context(|| format!("{} not found on PATH", name))
 }
 
-/// Profile names by accession (without its version), in file order.
-fn profile_names(hmm: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut name = String::new();
-    for line in hmm.lines() {
-        let mut f = line.split_whitespace();
-        match f.next() {
-            Some("NAME") => name = f.next().unwrap_or("").to_string(),
-            Some("ACC") => out.push((f.next().unwrap_or("").split('.').next().unwrap_or("").to_string(), name.clone())),
-            _ => {}
-        }
-    }
-    out
-}
-
 /// Search the six frames of every sequence in `seqs` (None: not searched)
 /// against the profiles in `hmm` with one nail run, and classify each
 /// sequence's hits.  `num_targets` is the database size used for the
@@ -161,9 +317,11 @@ pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usiz
     // nail 0.7.1 panics on a blank line in the profile file (LTR_retriever's
     // TEfam.hmm starts with one), so it gets a copy without them
     let hmm_text = std::fs::read_to_string(hmm).with_context(|| format!("reading {}", hmm.display()))?;
-    let profiles = profile_names(&hmm_text);
-    if profiles.is_empty() {
-        bail!("no profiles with an ACC line in {}", hmm.display());
+    let (tbl_classes, profiles) = ProfileTable::from_hmm(&hmm_text).with_context(|| format!("reading {}", hmm.display()))?;
+    eprintln!("[8b protein domains] {} profiles, classes {}", profiles.len(),
+              if tbl_classes.annotated { "from the profile file" } else { "from LTR_retriever's lists ( unannotated profile file )" });
+    if TABLE.set(tbl_classes).is_err() {
+        bail!("domain::search ran twice in one process; the profile classes are set once");
     }
     let hmm_copy = nail.work.join("profiles.hmm");
     std::fs::write(&hmm_copy, hmm_text.lines().filter(|l| !l.trim().is_empty()).map(|l| format!("{l}\n")).collect::<String>())?;
@@ -203,6 +361,7 @@ pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usiz
     }
     let mut calls: Vec<Option<DomainCall>> = seqs.iter().map(|s| s.map(|_| DomainCall::default())).collect();
     if n_frames == 0 {
+        std::fs::remove_dir_all(&nail.work).ok();
         return Ok(calls.into_iter().map(|c| c.map(|_| classify(Vec::new()))).collect());
     }
 
@@ -239,11 +398,15 @@ pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usiz
         }
         let (idx, fi) = f[0].rsplit_once('_').context("nail target name")?;
         let (idx, fi): (usize, usize) = (idx.parse()?, fi.parse()?);
+        if idx >= seqs.len() || fi >= 6 {
+            bail!("nail table names a target that was not searched: {}", line);
+        }
         let e: f64 = f[8].parse()?;
         if e > max_e {
             continue;
         }
-        let accession = f[1].split('.').next().unwrap_or("").to_string();
+        // the accession, or for a profile without one its NAME ( class dropped )
+        let accession = strip_version(f[1].split('#').next().unwrap_or("")).to_string();
         let rank = order.get(accession.as_str()).copied().unwrap_or(usize::MAX);
         let name = profiles.get(rank).map(|p| p.1.clone()).unwrap_or_default();
         // amino acid t (1-based) of frame fi covers strand bases
@@ -251,6 +414,9 @@ pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usiz
         // reverse complement
         let len = seqs[idx].map_or(0, |s| s.len());
         let (ts, te): (usize, usize) = (f[2].parse()?, f[3].parse()?);
+        if ts == 0 || te < ts {
+            bail!("nail table line with target coordinates {}..{}: {}", ts, te, line);
+        }
         let o = fi % 3;
         let (a, b) = (o + 3 * (ts - 1), (o + 3 * te).min(len));
         let (start, end) = if fi < 3 { (a, b) } else { (len - b, len - a) };
@@ -305,10 +471,10 @@ impl DomainCall {
     /// profiles on the list (DUF1263 and its relatives) do occur inside
     /// LTRs, so the caller decides which accessions count.
     pub fn ltr_order_hits(&self) -> Vec<String> {
-        let ltr: HashSet<&str> = LTR.iter().copied().collect();
+        let t = table();
         self.hits
             .iter()
-            .filter(|h| ltr.contains(h.accession.as_str()))
+            .filter(|h| t.get(&h.accession).map_or(false, |c| c.order == Order::Ltr))
             .map(|h| format!("{}:{:.1e}:{}", h.accession, h.e_value, FRAME_NAMES[h.frame]))
             .collect()
     }
@@ -316,20 +482,11 @@ impl DomainCall {
 
 pub const FRAME_NAMES: [&str; 6] = ["aa1", "aa2", "aa3", "rev_aa1", "rev_aa2", "rev_aa3"];
 
-/// Polyprotein domains that decide the veto: a hit to one of these inside an
-/// LTR means the "LTR" is internal sequence.  The rest of the LTR list
-/// (DUF834 and DUF1263 above all) turns up inside real LTRs: 748 annotated
-/// LTR pairs on rice.
-pub const CORE: &[&str] = &[
-    "PF00665", "PF13683", // integrase core
-    "PF03732", "PF14223", "PF14244", "PF13976", // gag, gag-pre-integrase
-    "PF07727", // reverse transcriptase (copia)
-    "PF13650", "PF13975", "PF09668", "PF00077", "PF08284", "PF02160", "PF12384", // aspartyl proteases
-    "PF00385", // chromo
-];
-
+/// A hit (`accession` or `accession:E-value:frame`) to a core polyprotein
+/// profile: such a hit inside an LTR means the "LTR" is internal sequence.
 pub fn is_core(hit: &str) -> bool {
-    CORE.iter().any(|a| hit.starts_with(a))
+    let key = hit.split(':').next().unwrap_or("");
+    table().get(key).map_or(false, |c| c.core)
 }
 
 /// E-value a core hit needs before it counts as evidence of nesting.
@@ -343,6 +500,9 @@ pub const NEST_DUP_GAP: usize = 1000;
 /// are core hits on both strands, `dup` when one core profile hits twice on
 /// one strand at least `NEST_DUP_GAP` bp apart.  A single element encodes
 /// each core domain once, on one strand.  None when neither holds.
+/// nail reports one row per (frame, profile), its best, so `dup` sees two
+/// copies only when they lie in different reading frames of the strand
+/// (two of three nested same-strand copies, by chance of frame).
 pub fn nesting(call: &DomainCall) -> Option<&'static str> {
     let core: Vec<&DomainHit> = call.hits.iter().filter(|h| is_core(&h.accession) && h.e_value <= NEST_MAX_E).collect();
     let plus = core.iter().any(|h| h.frame < 3);
@@ -367,22 +527,22 @@ fn classify(hits: Vec<DomainHit>) -> DomainCall {
     if hits.is_empty() {
         return DomainCall { hits, order: "none".into(), superfamily: "unknown".into(), strand: "?".into(), ..Default::default() };
     }
-    let ltr: HashSet<&str> = LTR.iter().copied().collect();
-    let not_ltr: HashSet<&str> = NOT_LTR.iter().copied().collect();
-    let gypsy: HashSet<&str> = GYPSY.iter().copied().collect();
-    let copia: HashSet<&str> = COPIA.iter().copied().collect();
+    let t = table();
     let mut order: Option<&str> = None;
     let (mut n_gypsy, mut n_copia, mut n_plus, mut n_minus) = (0usize, 0usize, 0usize, 0usize);
     for h in &hits {
-        let acc = h.accession.as_str();
-        let d = if ltr.contains(acc) { "LTR" } else if not_ltr.contains(acc) { "notLTR" } else { "NA" };
+        let pc = t.get(&h.accession);
+        let d = match pc.map(|c| c.order) { Some(Order::Ltr) => "LTR", Some(Order::NotLtr) => "notLTR", _ => "NA" };
         order = Some(match order {
             None => d,
             Some(prev) if prev == d => prev,
             Some(_) => "mixture",
         });
-        if gypsy.contains(acc) { n_gypsy += 1; }
-        if copia.contains(acc) { n_copia += 1; }
+        match pc.and_then(|c| c.superfamily) {
+            Some("Gypsy") => n_gypsy += 1,
+            Some("Copia") => n_copia += 1,
+            _ => {}
+        }
         if h.frame < 3 { n_plus += 1; } else { n_minus += 1; }
     }
     let superfamily = if n_gypsy > n_copia && (n_copia as f64) / (n_gypsy as f64) < 0.3 {
@@ -443,5 +603,50 @@ mod tests {
         let c = classify(vec![mk("PF07727", 5)]);
         assert_eq!((c.order.as_str(), c.superfamily.as_str(), c.strand.as_str()), ("LTR", "Copia", "-"));
         assert_eq!(classify(vec![]).order, "none");
+    }
+
+    fn profile(name: &str, acc: Option<&str>, desc: &str) -> String {
+        let acc = acc.map(|a| format!("ACC   {a}\n")).unwrap_or_default();
+        format!("HMMER3/f [3.4 | Aug 2023]\nNAME  {name}\n{acc}DESC  {desc}\nLENG  10\nALPH  amino\n//\n")
+    }
+
+    #[test]
+    fn profile_table_from_annotated_file() {
+        let hmm = [
+            profile("rve#LTR", Some("PF00665.27"), "Integrase core domain [role=core]"),
+            profile("RVT_2#LTR/Copia", Some("PF07727.19"), "Reverse transcriptase (RNA-dependent DNA polymerase) [role=core]"),
+            profile("DUF834#LTR/Gypsy", Some("PF05754.15"), "Domain of unknown function (DUF834)"),
+            profile("MULE#DNA/MULE-MuDR", Some("PF10551.13"), "MULE transposase domain"),
+            profile("myRT#LTR/Pao", None, "custom profile [role=core]"),
+            profile("Other", Some("PF99999.1"), "no class"),
+        ].concat();
+        let (t, keys) = ProfileTable::from_hmm(&hmm).unwrap();
+        assert!(t.annotated);
+        assert_eq!(keys.iter().map(|k| k.0.as_str()).collect::<Vec<_>>(), ["PF00665", "PF07727", "PF05754", "PF10551", "myRT", "PF99999"]);
+        assert_eq!(keys[0].1, "rve");
+        let c = |k: &str| t.get(k).cloned().unwrap();
+        assert!(c("PF00665").core && c("PF00665").order == Order::Ltr && c("PF00665").superfamily.is_none());
+        assert_eq!(c("PF07727").superfamily, Some("Copia"));
+        assert!(!c("PF05754").core && c("PF05754").superfamily == Some("Gypsy"));
+        assert!(c("PF10551").order == Order::NotLtr && !c("PF10551").core);
+        assert!(c("myRT").core && c("myRT").superfamily.is_none());
+        assert_eq!(c("PF99999").order, Order::Unclassified);
+        // not in the file: no class at all ( unlike the legacy lists )
+        assert!(t.get("PF13650").is_none());
+    }
+
+    #[test]
+    fn profile_table_errors_and_legacy() {
+        assert!(ProfileTable::from_hmm(&profile("MULE#DNA", Some("PF10551.1"), "x [role=core]")).is_err());
+        assert!(ProfileTable::from_hmm(&profile("rve#LTR", Some("PF00665.1"), "x [role=accessory]")).is_err());
+        assert!(ProfileTable::from_hmm(&[profile("a#LTR", Some("PF1.1"), ""), profile("b#LTR", Some("PF1.2"), "")].concat()).is_err());
+        // no class anywhere: annotate_TE.pl's lists
+        let (t, _) = ProfileTable::from_hmm(&profile("rve", Some("PF00665.27"), "Integrase core domain")).unwrap();
+        assert!(!t.annotated);
+        assert!(t.get("PF00665").unwrap().core && t.get("PF00665").unwrap().superfamily == Some("Gypsy"));
+        assert_eq!(t.get("PF00078").unwrap().order, Order::Unclassified);
+        assert_eq!(t.get("PF10551").unwrap().order, Order::NotLtr);
+        assert_eq!(strip_version("PF00665.27"), "PF00665");
+        assert_eq!(strip_version("Gag_p24.v2"), "Gag_p24.v2");
     }
 }

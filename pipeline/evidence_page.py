@@ -74,7 +74,8 @@ class Genome:
         if e < s: return ''
         s -= 1
         a = off + s // lb * lB + s % lb; b = off + (e - 1) // lb * lB + (e - 1) % lb
-        self.f.seek(a); return self.f.read(b - a + 1).replace(b'\n', b'').replace(b'\r', b'').decode().upper()
+        # os.pread: one positioned read, safe from the thread pool (seek + read on the shared handle was not)
+        return os.pread(self.f.fileno(), b - a + 1, a).replace(b'\n', b'').replace(b'\r', b'').decode().upper()
 
 
 CODON = {}
@@ -274,9 +275,9 @@ def main():
     # ---- profile names and reference libraries ---------------------------------------------------
     hmm_desc, name = {}, None      # accession (no version) -> name, description
     for l in open(a.domain_hmm):
-        if l.startswith('NAME'): name = l.split()[1]
+        if l.startswith('NAME'): name = l.split()[1].split('#')[0]   # <name>#<class> in an annotated file
         elif l.startswith('ACC'): hmm_desc[l.split()[1].split('.')[0]] = {'name': name, 'desc': ''}; acc = l.split()[1].split('.')[0]
-        elif l.startswith('DESC'): hmm_desc[acc]['desc'] = l[6:].strip()
+        elif l.startswith('DESC'): hmm_desc[acc]['desc'] = l[6:].strip().removesuffix('[role=core]').strip()
     ref = read_fa(a.reference) if a.reference else {}
     ref_int = {n: s_ for n, s_ in ref.items() if not re.search(r'(_LTR|-LTR|LTR$)', n.split('#')[0])}
     if a.reference:
@@ -434,7 +435,8 @@ def main():
             'reference': os.path.basename(a.reference) if a.reference else None, 'totals': totals,
             'pbs': {'elements': n_elem, 'with_pbs': sum(pbs_use.values()), 'top': pbs_use.most_common(8)}}
     t = open(os.path.join(HERE, 'evidence_template.html')).read()
-    open(a.out, 'w').write(t.replace('/*DATA*/', json.dumps(cases)).replace('/*META*/', json.dumps(meta)))
+    js = lambda x: json.dumps(x).replace('</', '<\\/')   # a '</script>' inside a string must not end the script element
+    open(a.out, 'w').write(t.replace('/*DATA*/', js(cases)).replace('/*META*/', js(meta)))
     print(f'evidence_page: {len(cases)} families -> {a.out}; ' +
           ', '.join(f'{k} {v}' for k, v in collections.Counter(c['verdict'][1].split(' (')[0] for c in cases).most_common()))
 

@@ -3,8 +3,10 @@
 # otherwise the multi-element cluster whose internal records cover most of it.  A 50 bp bin is
 # cut when an LTR record aligns across it as a whole copy (80% of the LTR record, at least 100 bp)
 # and no internal record of the voting cluster covers the bin.  Runs shorter than 100 bp stay.
-# usage: nested_vote.py <allvsall.tsv> <clusters.json> <records.fa> <out.fa>
-import sys, json, collections, bisect
+# usage: nested_vote.py <allvsall.tsv> <clusters.json> <records.fa> <out.fa>   (env TSV as in step4.py)
+import sys, os, json, collections
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from records import element_lookup
 ava, clusfile, recfa, outfa = sys.argv[1:5]
 BIN=50; MIN_ID=80.0
 clus=json.load(open(clusfile))
@@ -13,19 +15,9 @@ for l in open(recfa):
     if l.startswith('>'): full=l[1:].strip().split()[0]; n=full.split('#')[0]; names[n]=full; seqs[n]=[]
     else: seqs[n].append(l.strip())
 seqs={k:''.join(v) for k,v in seqs.items()}
-by_seq=collections.defaultdict(list)
-for e in clus:
-    s,rest=e.split(':',1); a,b=rest.split('..'); by_seq[s].append((int(a),int(b),e))
-for s in by_seq: by_seq[s].sort()
-def cluster_of(rec):
-    s,rest=rec.split(':',1); a,b=rest.split('_')[0].split('..'); a,b=int(a),int(b); lst=by_seq.get(s,[])
-    i=bisect.bisect_right(lst,(a,float('inf'),''))-1
-    while i>=0 and lst[i][1]>=a:
-        if lst[i][0]<=a and b<=lst[i][1]: return clus[lst[i][2]]
-        i-=1
-    return None
+elem=element_lookup(clus)
 size=collections.Counter(clus.values())
-rec_clu={r:cluster_of(r) for r in seqs}
+rec_clu={r:clus.get(elem(r)) for r in seqs}
 int_bins=collections.defaultdict(lambda: collections.defaultdict(set))   # q -> cluster -> bins covered by that cluster's INTs
 ltr_bins=collections.defaultdict(set)                                     # q -> bins covered by whole-copy LTR hits
 for l in open(ava):

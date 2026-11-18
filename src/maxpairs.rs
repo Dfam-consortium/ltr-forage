@@ -239,6 +239,12 @@ fn process_branch(
 /// number of bases before the first wildcard at or after `p`; two suffixes
 /// sharing a prefix have the same wildcard at the same offset, so capping the
 /// LCP of a suffix at `cap(p)` reproduces GT's LCP.
+///
+/// The same structure holds a positional mask (`masked`: tandem arrays, BED
+/// intervals), but that one cannot be applied as an LCP cap: a masked run
+/// sits at a different offset in each suffix, so capping one suffix's LCP
+/// splits the interval of the unmasked suffixes around it.  See
+/// `enumerate_maximal_repeats`.
 pub struct WildRuns {
     runs: Vec<(usize, usize)>, // [start, end) of each run, sorted
 }
@@ -261,10 +267,9 @@ impl WildRuns {
         WildRuns { runs }
     }
 
-    /// Wildcard runs plus extra masked runs (sorted, disjoint), merged.
-    pub fn with_extra(text: &[u8], extra: &[(usize, usize)]) -> Self {
-        let mut all = WildRuns::new(text).runs;
-        all.extend_from_slice(extra);
+    /// A positional mask: the given runs (any order, may overlap), merged.
+    pub fn masked(extra: &[(usize, usize)]) -> Self {
+        let mut all = extra.to_vec();
         all.sort_unstable();
         let mut runs: Vec<(usize, usize)> = Vec::new();
         for (a, b) in all {
@@ -274,6 +279,10 @@ impl WildRuns {
             }
         }
         WildRuns { runs }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
     }
 
     #[inline]
@@ -307,6 +316,21 @@ impl WildRuns {
 ///                    non-ACGT positions are excluded)
 /// * `min_len`      — minimum repeat length
 /// * `wild`         — wildcard runs; each LCP is capped so no repeat spans one
+/// * `mask`         — positional mask (tandem arrays, BED intervals).  A suffix
+///                    with fewer than `min_len` bases before the next masked
+///                    run is left out of the traversal (the LCP between the
+///                    suffixes around it is the minimum of the LCPs skipped,
+///                    so what remains is the suffix array of the unmasked
+///                    suffixes), and a repeat is cut where either copy runs
+///                    into a masked run on its right.  Seeds between unmasked
+///                    copies are therefore the same with or without masked
+///                    copies elsewhere, and no seed starts in or runs into
+///                    the mask.
+///                    KNOWN DEFECT: a repeat that starts under the mask in
+///                    either copy is dropped, not cut.  Its unmasked
+///                    remainder has the same base to its left in both copies,
+///                    so it fails the left-maximality test, which does not
+///                    look at the mask
 /// * `callback`     — called for each maximal repeat `(pos1, pos2, len)`
 pub fn enumerate_maximal_repeats(
     mut sa: impl Iterator<Item = usize>,
@@ -315,13 +339,42 @@ pub fn enumerate_maximal_repeats(
     num_suffixes: usize,
     min_len: usize,
     wild: &WildRuns,
+    mask: &WildRuns,
     cb: &mut dyn FnMut(usize, usize, usize),
 ) {
     if num_suffixes == 0 {
         return;
     }
-    // lcp[0] is never used: the traversal reads lcp[idx + 1] at step idx.
-    lcp.next();
+    let use_mask = !mask.is_empty();
+    let mut clamped = |a: usize, b: usize, len: usize| {
+        let len = len.min(mask.cap(a)).min(mask.cap(b));
+        cb(a, b, len);
+    };
+    let cb: &mut dyn FnMut(usize, usize, usize) = if use_mask { &mut clamped } else { cb };
+
+    // The next suffix the traversal sees and its LCP with the one before it.
+    let mut read = 0usize;
+    let mut skipped_min = usize::MAX;
+    let mut next_suffix = move || -> Option<(usize, usize)> {
+        while read < num_suffixes {
+            let p = sa.next().expect("suffix array shorter than num_suffixes");
+            let l = lcp.next().unwrap_or(0);
+            read += 1;
+            if use_mask {
+                skipped_min = skipped_min.min(l);
+                if mask.cap(p) < min_len {
+                    continue;
+                }
+                let l = skipped_min;
+                skipped_min = usize::MAX;
+                return Some((p, l));
+            }
+            return Some((p, l));
+        }
+        None
+    };
+    // the first suffix's own LCP is never used: step idx reads the next one's
+    let mut cur = next_suffix();
 
     // Stack entries: (lcp_depth, left_boundary, node_info)
     let mut s_lcp: Vec<usize> = vec![0];
@@ -333,15 +386,15 @@ pub fn enumerate_maximal_repeats(
 
     let mut first_from_root = true;
 
-    for idx in 0..num_suffixes {
-        let cur_sa = sa.next().expect("suffix array shorter than num_suffixes");
+    let mut idx = 0usize;
+    while let Some((cur_sa, _)) = cur {
         // The C ESA bottom-up traversal (SAIN path) uses a look-ahead LCP:
         // at step idx, lcpvalue = LCP(sa[idx], sa[idx+1]).
         // Sufr stores the standard look-back LCP: lcp[i] = LCP(sa[i-1], sa[i]).
         // Shift by one so each suffix is placed at the correct node depth;
         // past the last suffix the look-ahead value is 0.
-        let cur_lcp = if idx + 1 < num_suffixes { lcp.next().unwrap_or(0) } else { 0 };
-        let cur_lcp = cur_lcp.min(wild.cap(cur_sa));
+        let next = next_suffix();
+        let cur_lcp = next.map_or(0, |(_, l)| l).min(wild.cap(cur_sa));
 
         // ---- Part 1: add current suffix as leaf to current top, if depth matches ----
         let top_lcp = *s_lcp.last().unwrap();
@@ -424,6 +477,8 @@ pub fn enumerate_maximal_repeats(
                 );
             }
         }
+        cur = next;
+        idx += 1;
     }
 
     // ---- Cleanup: close any still-open interval at the top of the stack ----
@@ -463,7 +518,58 @@ mod tests {
             .collect();
         let wild = WildRuns::new(text);
         let mut hits = Vec::new();
-        enumerate_maximal_repeats(sa.iter().copied(), lcp.iter().copied(), text, sa.len(), 20, &wild, &mut |a, b, l| hits.push((a, b, l)));
+        enumerate_maximal_repeats(sa.iter().copied(), lcp.iter().copied(), text, sa.len(), 20, &wild, &WildRuns::masked(&[]), &mut |a, b, l| hits.push((a, b, l)));
         assert!(hits.is_empty(), "N gaps produced repeats: {:?}", hits);
+    }
+
+    fn naive(text: &[u8]) -> (Vec<usize>, Vec<usize>) {
+        let mut sa: Vec<usize> = (0..text.len()).collect();
+        sa.sort_by(|&a, &b| text[a..].cmp(&text[b..]));
+        let lcp = (0..sa.len())
+            .map(|i| if i == 0 { 0 } else { text[sa[i - 1]..].iter().zip(&text[sa[i]..]).take_while(|(x, y)| x == y).count() })
+            .collect();
+        (sa, lcp)
+    }
+
+    fn seeds(text: &[u8], min: usize, mask: &[(usize, usize)]) -> Vec<(usize, usize, usize)> {
+        let (sa, lcp) = naive(text);
+        let mut hits = Vec::new();
+        enumerate_maximal_repeats(sa.iter().copied(), lcp.iter().copied(), text, sa.len(), min, &WildRuns::new(text), &WildRuns::masked(mask), &mut |a, b, l| hits.push((a, b, l)));
+        hits.sort_unstable();
+        hits
+    }
+
+    /// Pseudo-random ACGT (xorshift), so no chance repeat reaches the seed length.
+    fn random_dna(n: usize, mut x: u64) -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                b"ACGT"[(x >> 33) as usize & 3]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn masked_copy_does_not_hide_unmasked_pair() {
+        // three copies of one 40-mer at 201, 443 and 685
+        let mut text = random_dna(900, 0x9E3779B97F4A7C15);
+        let unit = random_dna(40, 0xD1B54A32D192ED03);
+        for (&p, &flank) in [201usize, 443, 685].iter().zip(b"ACG") {
+            text[p..p + 40].copy_from_slice(&unit);
+            // a different base on each side of each copy, so the repeat is exactly the 40-mer
+            text[p - 1] = flank;
+            text[p + 40] = flank;
+        }
+        assert_eq!(seeds(&text, 30, &[]), vec![(201, 443, 40), (201, 685, 40), (443, 685, 40)]);
+        // whichever copy is masked, the other two still pair and nothing pairs with the masked one
+        assert_eq!(seeds(&text, 30, &[(190, 250)]), vec![(443, 685, 40)]);
+        assert_eq!(seeds(&text, 30, &[(430, 500)]), vec![(201, 685, 40)]);
+        assert_eq!(seeds(&text, 30, &[(680, 730)]), vec![(201, 443, 40)]);
+        // a mask reaching into a copy cuts the seed there: 35 bases of the middle copy are left
+        assert_eq!(seeds(&text, 30, &[(478, 500)]), vec![(201, 443, 35), (201, 685, 40), (443, 685, 35)]);
+        // and fewer than the seed length left hides the copy
+        assert_eq!(seeds(&text, 30, &[(470, 500)]), vec![(201, 685, 40)]);
     }
 }

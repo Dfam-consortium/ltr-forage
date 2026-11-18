@@ -80,8 +80,8 @@ ltr-forage genome.sufr --library elements.fa --fastan-out tandem.bed -j 24 \
 
 The defaults are the settings the library driver uses: tandem arrays
 masked, LTR pairs re-aligned in a 7 kb window, calls whose final ends agree
-within 20 bp merged, protein domains searched with LTR_retriever's
-`TEfam.hmm` (shipped in `data/`), overlapping calls resolved by evidence,
+within 20 bp merged, protein domains searched with `data/TEdomains.hmm`
+(122 Pfam profiles), overlapping calls resolved by evidence,
 and the per-candidate table on stdout.  The domain search writes about 2 GB
 of scratch files for a primate genome to `$TMPDIR` or `/tmp`;
 `--temp-dir DIR` puts them elsewhere.  `ltr-forage` checks its programs,
@@ -124,8 +124,8 @@ awk -F'\t' 'NR==1 {for (i = 1; i <= NF; i++) c[$i] = i; next}
             $c["keep"] == 1 {print $1"\t"$2-1"\t"$3"\t"$c["evidence"]"\t"$c["identity"]}' cand.tsv > copies.bed
 ```
 
-`--format gt` writes LTRharvest's format instead of the table.  The
-evidence for each copy is in `cand.tsv`; there is no per-copy HTML report
+`--format gt` writes the kept elements in LTRharvest's format instead of the
+table.  The evidence for each copy is in `cand.tsv`; there is no per-copy HTML report
 yet (the evidence page below is per family and needs the library run).
 
 ### 3. Build a family library, with the evidence page
@@ -197,9 +197,11 @@ The tandem-array mask (`src/fastan.rs`) is a port of Gene Myers' FasTAN
 ([github.com/thegenemyers/FASTAN](https://github.com/thegenemyers/FASTAN)),
 including the wave aligner it takes from daligner (Myers 2014).
 
-The default protein profiles, `data/TEfam.hmm`, are LTR_retriever's
-`database/TEfam.hmm` (102 Pfam profiles of transposable-element proteins;
-Ou and Jiang 2018), distributed under GPL v3.
+The default protein profiles, `data/TEdomains.hmm`, are 122 Pfam profiles
+of transposable-element proteins: 116 from Pfam 39.0 and six taken from
+LTR_retriever's `database/TEfam.hmm` (Ou and Jiang 2018).  The choice of
+profiles starts from LTR_retriever's list.  `data/TEfam.hmm` is
+LTR_retriever's file itself (102 Pfam profiles), distributed under GPL v3.
 
 ---
 
@@ -275,8 +277,20 @@ overlap removal before re-extension) dropped from 320,350 candidates
 and 7.3 h to 24,283 candidates and 40 min at 8 threads, and the kept set
 grew from 1,805 to 2,137 elements while their curated LTR support rose from
 96% to 98%. `--mask-bed` adds intervals of one's own (name, 0-based start,
-end) to the mask.
+end; tabs or spaces) to the mask.  A line that does not parse stops the
+run, since skipping it would leave that interval unmasked.
 `--no-fastan` turns the mask off.
+
+**Known defect.** A repeat that runs into the mask on its right is cut at
+the mask.  A repeat that starts under the mask in either copy is dropped,
+even when `--min-seed` or more unmasked matching bases follow: the
+remainder is not left-maximal, and the test for that does not know about
+the mask.  A pair of identical LTRs is one long match, so a masked array
+over the first bases of either LTR removes its only seed.  A patched seed
+search (candidate step only, no library scored) kept 4 more elements on
+Arabidopsis, 36 on rice, 12 on zebra finch, 83 on lotus, 7 on gorilla and
+81 on mouse, 0.3% to 0.9% of the kept elements; 201 of the 223 have
+curated LTR annotation on both LTRs.  Not fixed yet.
 
 ### 3. Seed pairs
 
@@ -457,11 +471,21 @@ kb apart. Of the signals we measured on hg38, rice and Arabidopsis, a
 retrotransposon protein domain in the internal region separates the real
 elements best.  ltr-forage searches each candidate's six-frame
 translation against a HMMER3 file of profile HMMs with
-[nail](https://github.com/TravisWheelerLab/nail): LTR_retriever's
-`TEfam.hmm` (102 Pfam profiles, shipped as `data/TEfam.hmm`) by default,
-or any HMMER3 amino-acid profile file given with `--domain-hmm`.
-`--no-domains` skips the search.  On hg38 a hit of LTR order marks 68% of
-the RepeatMasker-annotated elements and 0.5% of the other candidates.
+[nail](https://github.com/TravisWheelerLab/nail): `data/TEdomains.hmm` by
+default, or any HMMER3 amino-acid profile file given with `--domain-hmm`.
+`--no-domains` skips the search.  On hg38, with LTR_retriever's
+`TEfam.hmm`, a hit of LTR order marks 68% of the RepeatMasker-annotated
+elements and 0.5% of the other candidates.
+
+`data/TEdomains.hmm` holds 122 Pfam profiles (67 LTR, 55 not LTR).  Each
+carries its RepeatMasker class in its name (`rve#LTR`,
+`RVT_2#LTR/Copia`), and polyprotein domains are marked `[role=core]`.
+It is LTR_retriever's list rebuilt from Pfam 39.0, with retrotransposon
+core domains added, Atrophin-1 removed, and six profiles kept as their 2015
+builds because the Pfam 39.0 rebuilds find far fewer elements.
+`data/domains/README.md` gives the list, the evidence for each class and
+the build script.  `--domain-hmm data/TEfam.hmm` uses LTR_retriever's own
+file (102 Pfam profiles), the default until 2026-11-17.
 
 ltr-forage translates each element plus `--domain-flank` bases (default 50)
 on each side in six frames, with stop codons as X, writes the frames as a
@@ -490,6 +514,8 @@ The hits are classified as LTR_retriever's `annotate_TE.pl` does: profiles
 belong to an LTR list or a not-LTR list (DNA transposons, LINEs, helitrons,
 host genes); a candidate whose hits are all on the LTR list is `LTR`, all on
 the other list `notLTR`, both `mixture`, and hits on neither list `NA`.
+The lists come from the classes in the profile names; a file without
+classes, such as `TEfam.hmm`, gets `annotate_TE.pl`'s own lists.
 Superfamily is `Gypsy` when Copia-list hits are fewer than 0.3 of the
 Gypsy-list hits, `Copia` when Gypsy-list hits are fewer than 0.9 of the
 Copia-list hits, and strand `+` or `-` when hits on the other strand are
@@ -520,7 +546,10 @@ domain search. `--trna-scan FASTA` runs it alone; `--no-pbs-trna` skips it.
 
 **Probes.** Each tRNA gene of 70 to 120 bp with a standard amino acid gives
 an 18-nt probe: the reverse complement of its last 15 nt plus CCA, which
-starts with TGG. The test is the probe's first 12 nt, the tRNA's
+starts with TGG. The gene ends at the discriminator base: where the genome
+happens to continue with C, CC or CCA, ARAGORN reports the gene that much
+longer, and those bases are left out before the CCA is added (counting them
+shifted the probe by one to three bases). The test is the probe's first 12 nt, the tRNA's
 3′-terminal 12 nt, with the TGG exact and at most one mismatch elsewhere,
 starting 5 bp before to 15 bp after the first base past the 5′ LTR. Many
 families pair over only these 12 to 13 nt: rice elements primed by the
@@ -542,7 +571,7 @@ strong evidence that a 5′ LTR end is real, but its absence is not evidence
 against an element: some families carry no recognizable PBS.
 
 **tRNA library (`--trna-out FILE`).** FILE is a FASTA library with one entry
-per distinct tRNA gene sequence, sorted by the number of kept elements it
+per distinct tRNA gene sequence (up to the discriminator base), sorted by the number of kept elements it
 primes:
 
 ```
@@ -731,7 +760,9 @@ Without `--library` the table is the only output.
 (with the TSD search below), 5 and 10 (`best` by default; `no` and `all`
 are accepted), and LTRharvest's output format.  No tandem-array mask,
 re-extension, annotation or decision; `--library`, `--trna-out`,
-`--fastan-out`, `--format tsv` and `--overlaps evidence` are refused.
+`--fastan-out`, `--format tsv` and `--overlaps evidence` are refused, and so
+is any option that only the skipped steps read (the re-extension, domain,
+decision and PBS options), which would otherwise be ignored without a word.
 The TSD and motif options `--mintsd`, `--maxtsd`, `--vicinity`, `--motif`,
 `--motifmis` and `--tiered-tsd` exist only in this mode.
 
@@ -838,8 +869,8 @@ per-candidate steps keep the candidates' order.
 - For the protein-domain search (step 8b): `nail` ≥ 0.7.1
   ([TravisWheelerLab/nail](https://github.com/TravisWheelerLab/nail)) and
   MMseqs2 (`mmseqs`), which nail seeds with; not needed with `--no-domains`
-  or `--ltrharvest`.  The protein profiles ship in `data/TEfam.hmm`; the
-  binary looks for them in the checkout it was built from, so give
+  or `--ltrharvest`.  The protein profiles ship in `data/TEdomains.hmm`;
+  the binary looks for them in the checkout it was built from, so give
   `--domain-hmm` if you move it.
 
 For the family-library driver (`pipeline/ltr_library.py`) also:
@@ -904,7 +935,8 @@ Tandem-array mask (step 2):
       --no-fastan           Search tandem arrays for seeds too
       --fastan-out <FILE>   Write the masked arrays as BED (name, start, end, period, 1000 x identity)
       --fastan-only         Only find the arrays (writes --fastan-out) and exit
-      --mask-bed <FILE>     Also mask these intervals (BED: name, 0-based start, end)
+      --mask-bed <FILE>     Also mask these intervals (BED: name, 0-based start, end);
+                            a line that does not parse is an error
 
 Re-extension and near duplicates (steps 6, 7):
       --reextend-ltr-max <BP>   Longest LTR the alignment window reaches beyond each X-drop
@@ -922,7 +954,7 @@ Re-extension and near duplicates (steps 6, 7):
                             report coverage and the longest single-copy stretch
 
 Protein domains (step 8b):
-      --domain-hmm <FILE>   HMMER3 file of protein profiles [default: data/TEfam.hmm]
+      --domain-hmm <FILE>   HMMER3 file of protein profiles [default: data/TEdomains.hmm]
       --no-domains          Skip the domain search
       --domain-evalue <E>   E-value threshold for a domain hit [default: 0.05]
       --domain-flank <BP>   Bases added on each side of the element before translation [default: 50]
@@ -936,7 +968,7 @@ Primer binding site (step 8c):
       --no-pbs-trna         Skip the genome tRNA scan behind the PBS
       --pbs-domain-strand   Search for the PBS only on the strand the protein domains give (default: both)
       --trna-out <FILE>     Write the genome's tRNA library (FASTA) and every call (FILE.tsv)
-      --trna-intron-max <BP>  Longest tRNA intron searched for [default: 3000]
+      --trna-intron-max <BP>  Longest tRNA intron searched for, 0 to 3000 [default: 3000]
       --trna-scan <FASTA>   Only scan FASTA for tRNA genes, print the calls and exit
 
 Decision and overlaps (steps 9, 10):
@@ -948,7 +980,8 @@ Decision and overlaps (steps 9, 10):
       --overlaps <STRATEGY> evidence | best | no | all [default: evidence; best with --ltrharvest]
 
 Output (step 11):
-      --format <FORMAT>     tsv | gt [default: tsv; gt with --ltrharvest]
+      --format <FORMAT>     tsv | gt [default: tsv; gt with --ltrharvest]; gt lists the kept
+                            elements (every prediction with --ltrharvest)
       --library <FILE>      Write the kept elements as a FASTA library (left LTR, internal
                             region, right LTR per element)
   -j, --threads <N>         Threads (0 = all CPUs) [default: 0]
@@ -992,6 +1025,8 @@ ltr-forage hg38.sufr --ltrharvest \
 
 The default output is the per-candidate table below.  `--format gt` (the
 default with `--ltrharvest`) is compatible with GenomeTools LTRharvest.
+LTRharvest's table has no keep column, so outside `--ltrharvest` it lists
+the kept elements only, with their final (re-extended) coordinates.
 The file begins with a comment block describing the parameters and column
 layout, followed by one space-separated data line per prediction.
 
@@ -1051,7 +1086,7 @@ sequence named in the first column.
 | `tsd_len`, `tsd_seq`, `tsd_shift_l`, `tsd_shift_r` | Longest exact direct repeat (4 to 20 bp) flanking the element, allowing 0 or 1 bp of play at each end; failing that, a 6 or 5 bp repeat with one mismatch directly against both LTR ends (see `tsd_mm`). `tsd_seq` is the left copy; `.` and 0 when none |
 | `motif`, `motif_class` | First two bases of the left LTR and last two of the right LTR, and LTR_retriever's reading of them: `TGCA` for the canonical termini, `known` for the other pairs its rules accept (TGCT, TACA, TACT, TGGA, TGGT, TATA, TGTA, TGCC), `other` |
 | `ppt_purines15`, `ppt_offset` | Purine count in the most purine-rich 15 bp window within 30 bp before the right LTR, and that window's start relative to the right LTR |
-| `pbs_offset` | Start of the primer binding site relative to the first base after the 5′ LTR (−5 to +15), from the 12-nt tRNA match described under step 8c; −1 when none or with `--no-pbs-trna` |
+| `pbs_offset` | Start of the primer binding site relative to the first base after the 5′ LTR (−5 to +15), from the 12-nt tRNA match described under step 8c; `.` when none or with `--no-pbs-trna` (it was −1 before 2026-11-15, which is also a valid offset) |
 | `n_count` | Ns inside the element |
 | `xdrop_tsd_len` | Always 0: the TSD search at the X-drop ends runs only in LTRharvest mode, which writes no table (the column is kept so the others do not move) |
 | `int_tiles`, `int_multi_frac`, `int_gap_frac`, `int_gap_bp` | With `--internal-stats`: number of 20-mer tiles taken every 10 bp across the internal region (tiles containing N skipped), the fraction seen at least three times in the genome on either strand, and the longest run of single-copy tiles as a fraction of the tiles and in bases; `.` otherwise |
@@ -1059,8 +1094,8 @@ sequence named in the first column.
 | `dom_best_e`, `dom_hits` | Best E-value, and every hit as `accession:E-value:frame` (frames `aa1`..`aa3` forward, `rev_aa1`..`rev_aa3` on the reverse complement), comma separated; `.` when none |
 | `ltr_dom_hits` | Hits to the LTR-order (polyprotein) profiles when each LTR is searched on its own, summed over the two LTRs; 0 when `--keep-coding-ltrs` skips the search |
 | `lltr_self_cov`, `rltr_self_cov` | Fraction of each LTR covered by plus-strand alignments of the LTR against itself off the main diagonal; 1.00 for a satellite monomer or an Alu dimer, 0 for unique sequence |
-| `keep`, `evidence` | 1 when the candidate is kept, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `veto:ltrdomainN`, `veto:polyA`, `gapF` when `--internal-gap-max` rejected it, or `none`; `,overlap` is appended when step 10 dropped a kept candidate for an overlapping one with more evidence |
-| `pbs_trna`, `pbs_mm12` | The tRNA type(s) whose 3′-terminal 12 nt match the PBS, e.g. `Met(cat)` (several joined by `/` when they share the probe), and the mismatches (0 or 1); `.` when none |
+| `keep`, `evidence` | 1 when the candidate is kept, and what decided it: `domain`, `tsdN`, `tgca` (comma separated), `veto:notLTR`, `veto:mixture`, `veto:tandemF`, `veto:ltrdomainN`, `veto:polyA`, `gapF` when `--internal-gap-max` rejected it, or `none`; `,overlap` is appended when step 10 dropped a kept candidate for an overlapping one with more evidence.  In the library driver's `cand.tsv`, step 11b adds `veto:polyAfamily` to the elements it vetoes and writes `rescued` in place of `overlap` on those it keeps again |
+| `pbs_trna`, `pbs_mm12` | The tRNA type(s) whose 3′-terminal 12 nt match the PBS, e.g. `Met(cat)` (several joined by `/` when they share the 12 nt), and the mismatches (0 or 1); `.` when none |
 | `pbs_edist18` | Best edit distance (0 to 2) of a full 18-nt tRNA probe over the same window; `.` when none |
 | `pbs_strand` | `+` when the PBS was found after the left LTR, `-` when before the right LTR on the reverse strand; `.` when none |
 | `tsd_mm` | 1 when the TSD is the one-mismatch fallback, else 0. It is enriched about 20-fold over shifted flanks only for TG..CA elements (lotus), so it counts toward `--keep standard`/`loose` only alongside TG..CA; the evidence tag reads `tsd5mm1` |
@@ -1096,11 +1131,13 @@ and `--mmseqs` options, then the `LTRFORAGE`, `SUFR`, `RMBLASTN`,
 the usual install locations and checkouts next to this one. It skips a
 binary older than it needs (rmblastn 3.0.9, te-composer 0.6.6, nail 0.7.1),
 so an old install on `PATH` does not shadow a newer one. The protein
-profiles default to the shipped `data/TEfam.hmm` (`--domain-hmm`). A sufr
+profiles default to the shipped `data/TEdomains.hmm` (`--domain-hmm`). A sufr
 index beside the genome (`genome.sufr` for `genome.fa`) is used when it
-exists; `--sufr` names another. Each run writes the command and every
-program's path and version to `out/versions.txt`, and its step times to
-`out/steps.log`. The step scripts live beside the driver in `pipeline/`.
+exists and is not older than the genome; `--sufr` names another. Each run
+appends the command and every program's path and version to
+`out/versions.txt`, and its step times to `out/steps.log`.  The genome must
+be an uncompressed FASTA file whose sequence names are unique and hold no
+`#` (library records use it to separate name and class). The step scripts live beside the driver in `pipeline/`.
 
 ### Steps
 
@@ -1117,6 +1154,50 @@ figure.
    tandem arrays), giving the candidate table (`cand.tsv`), the masked
    arrays (`tandem.bed`) and a raw library of each kept element's LTR and
    internal region.
+
+11b. **Poly-A family veto** (`pipeline/polya_family.py`; `--polya-family 0`
+    turns it off).  ltr-forage vetoes a candidate whose two LTRs both end
+    in a poly-A tail: a pair of SINE or LINE copies.  The same repeats also
+    flank old ERV fragments, and such a pair is kept on the domain hit
+    between them.  This step compares both LTRs of every kept element with
+    the left LTRs of 2,000 poly-A-vetoed candidates (a seeded sample,
+    `--seed`) and vetoes the element when at least half of each LTR is
+    covered by at least `--polya-family` (10) of them.
+    - **It runs only on genomes with many such pairs.**  The pool of
+      poly-A-vetoed candidates, not counting those with an LTR domain hit of
+      their own, must hold at least `--polya-pool` (2,000).  Gorilla has
+      about 43,000, mouse about 17,400 and hg38 about 47,600; Arabidopsis, zebra finch, rice
+      and lotus have 1 to 42, so the step does nothing there.  In a small
+      pool many of the candidates are real elements the poly-A rule vetoed
+      wrongly (soybean 32 of 80, maize 18 of 24), and kept members of their
+      families match them.
+    - **Not measured: a pool between 80 and 17,000.**  No genome we ran
+      falls there, and the limit of 2,000 sits inside that range.  What the
+      step does on a genome just above the limit, or what such a genome
+      loses just below it, is unknown.  The step's line in `steps.log`
+      gives the pool size.
+    - On mouse and gorilla no kept element with LTR annotation on both
+      LTRs matched more than 5 of the 2,000; SINE-flanked ones matched
+      1,400 to 1,950 and LINE-flanked ones 10 to 380.  The step vetoes 148
+      to 298 kept elements on gorilla and 758 to 1,154 on mouse, depending
+      on the profile file.
+    - The step was developed on mouse and gorilla.  On hg38 (candidate
+      step only, no library) it vetoes 348 of 2,903 kept elements: 302
+      flanked by SINEs, 43 by LINEs and 3 by Alu and L1 pieces, none with
+      LTR annotation on both LTRs.  No LTR-annotated element matched more
+      than 1 of the 2,000, and the rescue kept 38 again, 37 of them
+      LTR-annotated.  Human and gorilla share their SINE and LINE
+      families; a mammal with other SINE families has not been run.
+    - **Overlap rescue** (`--no-polya-rescue` turns it off).  ltr-forage
+      resolves overlaps before this step.  A candidate that lost the
+      overlap choice only to elements vetoed here is kept again when no
+      part of either of its LTRs is covered by 10 of the sampled LTRs: 8 to
+      59 elements a run, 109 of 122 with LTR annotation on both LTRs.
+    - The vetoed rows of `cand.tsv` get `keep` 0 and `veto:polyAfamily`;
+      a rescued row reads `rescued` in place of `overlap`.
+    - The sample is seeded and the search does not depend on the thread
+      count, so a rerun gives the same library.  Another seed moves the
+      vetoed set by a few elements near the count of 10.
 12. **Pre-clustering.**  The raw library is clustered all-vs-all with
     rmblastn, LTRs against LTRs and internals against internals (the
     clustering reads only same-kind hits of 80% identity or more, and drops
@@ -1187,7 +1268,16 @@ figure.
 22. **Consensus models.**  A consensus model for each cluster of at least
     `--min-cons` elements and the exemplar element for smaller ones (at
     most 150 sampled copies, as in step 13).
-22b. **Model depth check.**  One more depth round on the finished models:
+22b. **Model depth check.**  When step 11b ran, the models are first cut
+    where at least `--polya-family` (10) of its sampled poly-A-terminated
+    repeats cover them (`pipeline/polya_cut.py`), and a model with under 50
+    bases left is dropped.  Until step 11b the elements those repeats flank
+    told the nested-LTR vote (step 15) where an L1 or SINE lay inside a
+    real element's internal region.  With them vetoed that evidence is
+    gone, and the depth check cannot replace it where the insertion is most
+    of the record: one mouse MTA internal of 3,594 bp, 2,807 of them L1,
+    masked 184 Mb outside the curated LTRs.
+    Then one more depth round on the finished models:
     a consensus model is cut where its depth reaches 10x its median, an
     exemplar at 5x (`--model-depth-ratio`); the cuts drop no model
     (`--no-model-depth` skips the step).  It removes passengers step 14
@@ -1238,7 +1328,13 @@ element, as the driver did before.  It is slower on large libraries and no
 more accurate.  `--min-cons 0` gives exemplar models only.  Each step's
 command lines and output go to `out/logs/`, and timings to
 `out/steps.log`.  A rerun skips finished steps; `--from STEP` reruns from a
-step on.
+step on.  Each finished step records the options it read, and the outdir
+records the genome (path, size and modification time): a rerun whose options
+or genome differ from a finished step's stops and names the step to rerun
+from, instead of mixing old and new results.  Programs and profile files
+are not part of that record; `versions.txt` shows what each run used.  When
+ltr-forage keeps no element the run ends with an empty `library.fa`,
+`library.stk` and a header-only `families.tsv`.
 
 ### Output
 
@@ -1280,24 +1376,101 @@ pipeline/evidence_page.py out genome.fa -o fp.html --families top-fp:30 \
 Library masking was scored against curated libraries: sensitivity and
 precision over the bases the curated LTR annotation covers.  Recovered
 families are the curated LTR and internal models covered at 80% or more.
-All ltr_library.py rows are runs of the current driver with its defaults,
-one genome at a time with 8 threads on a shared machine: steps 1-13 from
-end-to-end runs of 2026-11-11/12 and steps 14 on rerun on 2026-11-13 with
-the remapped depth rounds (times are the two parts added).  HiRepEat's
-times are with 16 threads.
+Every library in the table was scored with the same recipe
+(`eval/benchmarks/recipe/compare_libs.sh`).
+
+The three tools were run under different conditions, so the time column
+shows scale, not a benchmark.  All times are wall-clock on a shared 64-core
+machine with other jobs running.
+
+- **ltr_library.py**: the driver as it was on 2026-11-13, with its defaults
+  of that date (`data/TEfam.hmm`, no step 11b), 8 threads, one genome at a
+  time.  The current code and defaults are in the second table below.
+  Steps 1-13 are from end-to-end runs of 2026-11-11/12
+  and steps 14 on from a rerun on 2026-11-13 with the remapped depth rounds;
+  the time is the two parts added.  The sufr index was already built and is
+  not counted (it took 10 min for zebra finch and 15 min for gorilla).
+- **LTRPipeline**: RepeatModeler 2.0.9's, run with `-threads 8` from the Dfam
+  TETools image with digest
+  `af5f0716b49fa6421548f389f2d7930a76de413ba85e5fe3d4ab5972aa294603`
+  (GenomeTools 1.6.4, LTR_retriever 2.9.0, RepeatMasker 4.2.6), starting
+  2026-11-14.  It runs LTRharvest with its defaults, LTR_retriever with
+  `-noanno` (which uses RepeatMasker, CD-HIT and TRF), then MAFFT, NINJA and
+  Refiner.  Its time includes building the index.  In this release
+  suffixerator and LTRharvest run on one thread whatever `-threads` says;
+  they took 2, 6, 244 and 8 min of the Arabidopsis, rice, zebra finch and
+  lotus totals.  A 16-thread RepeatModeler job shared the machine during the
+  rice, zebra finch and lotus runs and an 8-thread job during Arabidopsis.
+  The mouse and gorilla runs had not finished when this was written.
+- **HiRepEat**: 16 threads.
 
 | Genome | Library | Sensitivity | Precision | Recovered LTR / INT | Time |
 |--------|---------|-------------|-----------|---------------------|------|
-| Arabidopsis (TAIR10.1) | ltr_library.py | 91.12% | 95.54% | 120 / 120 | 22 min |
-| Rice (MSU7) | ltr_library.py | 93.38% | 98.43% | 308 / 307 | 69 min |
-| Rice (MSU7) | HiRepEat | 83.10% | 99.61% | 80 / 76 | 19 min |
-| Mouse (mm10) | ltr_library.py | 42.88% | 92.86% | 106 / 41 | 225 min |
-| Mouse (mm10) | HiRepEat | 24.04% | 65.46% | 61 / 30 | 31 min |
-| Zebra finch (bTaeGut7) | ltr_library.py | 75.18% | 86.70% | 25 / 29 | 43 min |
-| Zebra finch (bTaeGut7) | HiRepEat | 70.58% | 90.86% | 16 / 27 | 20 min |
-| Lotus (ChineseLotus 1.1) | ltr_library.py | 92.46% | 94.14% | 287 / 298 | 301 min |
-| Gorilla (mGorGor1 v2.1) | ltr_library.py | 36.90% | 98.00% | 2 / 13 | 179 min |
-| Gorilla (mGorGor1 v2.1) | HiRepEat | 17.68% | 95.97% | 1 / 3 | 72 min |
+| Arabidopsis (TAIR10.1) | ltr_library.py | 91.12% | 95.54% | 120/150 / 120/150 | 22 min |
+| Arabidopsis (TAIR10.1) | LTRPipeline | 72.85% | 92.08% | 62/150 / 50/150 | 10 min |
+| Rice (MSU7) | ltr_library.py | 93.38% | 98.43% | 308/488 / 307/409 | 69 min |
+| Rice (MSU7) | LTRPipeline | 92.07% | 87.58% | 204/488 / 206/409 | 134 min |
+| Rice (MSU7) | HiRepEat | 83.10% | 99.61% | 87/488 / 75/409 | 19 min |
+| Mouse (mm10) | ltr_library.py | 42.88% | 92.86% | 106/525 / 41/116 | 225 min |
+| Mouse (mm10) | HiRepEat | 24.04% | 65.46% | 61/525 / 30/116 | 31 min |
+| Zebra finch (bTaeGut7) | ltr_library.py | 75.18% | 86.70% | 113/258 / 30/34 | 43 min |
+| Zebra finch (bTaeGut7) | LTRPipeline | 77.56% | 68.73% | 98/258 / 27/34 | 298 min |
+| Zebra finch (bTaeGut7) | HiRepEat | 70.58% | 90.86% | 92/258 / 29/34 | 20 min |
+| Lotus (ChineseLotus 1.1) | ltr_library.py | 92.46% | 94.14% | 287/433 / 298/367 | 301 min |
+| Lotus (ChineseLotus 1.1) | LTRPipeline | 87.96% | 87.32% | 202/433 / 173/367 | 68 min |
+| Gorilla (mGorGor1 v2.1) | ltr_library.py | 36.90% | 98.00% | 94/485 / 49/135 | 179 min |
+| Gorilla (mGorGor1 v2.1) | HiRepEat | 17.68% | 95.97% | 48/485 / 23/135 | 72 min |
+
+The recovered counts are out of each curated library's LTR and internal
+records.  Zebra finch and gorilla use RepeatMasker's names, where most LTRs
+carry no `LTR` suffix (THE1B, MLT1A0) and an internal may have
+no suffix in the library (HERVH, annotated as HERVH-int); `family_recovery.py`
+takes the part from the name where it has one and otherwise from the record's
+LTR class and the standard annotation (`--standard`).  Before 2026-11-15 it
+skipped every record without `LTR` or a trailing `I` in its name, and the
+ltr_library.py rows of the two read 25 / 29 and 2 / 13, out of 44 / 33 and
+11 / 79.  The 45 LINE,
+SINE and other non-LTR records in the Arabidopsis file are left out.
+
+**Current code and defaults.**  The `ltr_library.py` rows above are from
+before the code review of 2026-11-15.  The table below is the same six
+genomes with that review's fixes and the current defaults
+(`data/TEdomains.hmm`, step 11b with its guards and rescue, the poly-A
+repeat cut in step 22b), 8 threads, one genome at a time, scored with the
+same recipe:
+
+| Genome | Records / families | Sensitivity | Precision | Recovered LTR / INT | Time | Before the review (sensitivity / precision) |
+|--------|--------------------|-------------|-----------|---------------------|------|------|
+| Arabidopsis (TAIR10.1) | 412 / 205 | 91.09% | 95.50% | 121/150 / 121/150 | 33 min | 91.12% / 95.54% |
+| Rice (MSU7) | 929 / 443 | 93.57% | 98.42% | 309/488 / 306/409 | 101 min | 93.38% / 98.43% |
+| Zebra finch (bTaeGut7) | 216 / 105 | 76.13% | 86.28% | 130/258 / 32/34 | 65 min | 75.18% / 86.70% |
+| Lotus (ChineseLotus 1.1) | 3,405 / 799 | 92.64% | 94.32% | 283/433 / 293/367 | 512 min | 92.46% / 94.14% |
+| Mouse (mm10) | 458 / 202 | 44.05% | 96.47% | 116/525 / 44/116 | 300 min | 42.88% / 92.86% |
+| Gorilla (mGorGor1 v2.1) | 347 / 165 | 40.36% | 97.65% | 102/485 / 54/135 | 261 min | 36.90% / 98.00% |
+
+- Mouse and gorilla were run end to end from the repository code on
+  2026-11-17/18.  Step 11b vetoed 873 of 9,444 kept elements on mouse and
+  274 of 2,808 on gorilla and kept 55 and 18 again; the cut removed 7,210
+  bases of 7 mouse models and nothing on gorilla.  Peak memory was 38.0 GB
+  (mouse) and 15.7 GB (gorilla).
+- Gorilla's library holds one known false family, `fam0118_v1_LTR`: two
+  141-bp repeats 1.7 kb apart inside a SATR1 satellite array
+  (`CM055456.2:70120079..70122095`), kept on a weak RNase H hit
+  (PF17919, E = 1.4e-3) to sequence the satellite's repeat unit does
+  carry.  It masks 0.52 Mb of satellite; without it gorilla's precision
+  would be 98.10%.  Two tandem arrays cover 54% of its internal region but
+  leave its LTRs free.  Widening every masked array by one unit would hide
+  the pair and 77 other kept gorilla elements, 75 of them with curated LTR
+  annotation on both LTRs, so the family stays.
+- Arabidopsis, zebra finch, rice and lotus were run from the copy of the
+  pipeline in which the two steps were developed.  Step
+  11b does not run on these genomes (the pool guard), and the first
+  version of it, which did run on rice and lotus, vetoed nothing there.
+  They have not been rerun from the repository code.
+- The times are not comparable with the first table's: the machine was
+  busier (its load average was 35 to 105 during the lotus run).
+- The zebra finch recovered counts rise with the profile file: the fixed
+  code with `data/TEfam.hmm` recovers 114 / 28.
 
 Step 14's remapped rounds (the default since 2026-11-13) against the same
 runs with rounds 2 and 3 searched (`--no-depth-remap`), which is the
@@ -1635,7 +1808,9 @@ intact elements in a RepeatMasker annotation of hg38: an LTR-class annotation
 followed on the same strand by an internal region and then the nearest
 annotation of the same family, with both LTRs 100-1000 bp long and their 5'
 ends 1000-15000 bp apart, the window the tools were run with.  The annotation
-used here has 7,170 such elements.  A prediction hits one when each of its LTRs overlaps the
+used here has 7,002 such elements (internal regions are the `-int` annotations; an
+earlier version of the script also took any name ending in `I`, such as the LTR
+MLT1I, for one, and counted 7,170).  A prediction hits one when each of its LTRs overlaps the
 corresponding annotated LTR by at least half the length of the shorter.
 
 ```bash
@@ -1648,12 +1823,12 @@ Recall by the larger of the two LTRs' divergence from consensus:
 | Max LTR divergence | Elements | LTRharvest | ltr-forage |
 |---|---|---|---|
 | 0-5% | 585 | 90.9% | 90.9% |
-| 5-10% | 1,323 | 63.6% | 63.6% |
-| 10-15% | 1,785 | 21.2% | 21.2% |
-| 15-20% | 1,301 | 7.6% | 7.6% |
-| 20% and up | 2,176 | 2.3% | 2.3% |
+| 5-10% | 1,321 | 63.7% | 63.7% |
+| 10-15% | 1,754 | 21.6% | 21.6% |
+| 15-20% | 1,264 | 7.8% | 7.8% |
+| 20% and up | 2,078 | 2.5% | 2.5% |
 
-Both tools hit the same 1,902 elements, and none of the 28 predictions
+Both tools hit the same 1,903 elements, and none of the 28 predictions
 unique to one tool hits any of them.  The differences between the two
 outputs fall entirely on predictions that do not correspond to intact
 annotated elements.
@@ -1664,8 +1839,8 @@ eval/rm_classify.py hg38.fa.out hg38.fa.fai hg38_gt.out
 
 This labels each prediction by the repeat class under its two LTRs.  For
 either tool, 62% of hg38 predictions are pairs of SINE elements, 14% pairs of
-LINE fragments, 8.6% LTR class (2,777 of LTRharvest's with the same family on
-both sides), and 11% mostly unannotated.  That is a property of the LTRharvest search at these
+LINE fragments, 8.6% LTR class (3,229 of LTRharvest's 3,595 with the same family
+covering most of both sides), and 11% mostly unannotated.  That is a property of the LTRharvest search at these
 parameters on a SINE-rich genome rather than of either implementation, and it
 is why a RepeatMasker-based check is worth running on any change to the
 search.
@@ -1725,7 +1900,9 @@ licensed under GPL v3 or later to match.
 license whose notice the file reproduces.
 
 `data/TEfam.hmm` is LTR_retriever's `database/TEfam.hmm` (Ou and Jiang
-2018), distributed under GPL v3.
+2018), distributed under GPL v3.  `data/TEdomains.hmm` is built from Pfam
+39.0 profiles (Pfam is released under CC0) and six profiles copied from
+`TEfam.hmm`.
 
 The LTRharvest algorithm is implemented based on the published description and
 the open-source GenomeTools reference implementation (ISC license).  The `sufr`

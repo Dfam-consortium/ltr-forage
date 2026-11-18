@@ -66,12 +66,15 @@ fn rc(s: &[u8]) -> Vec<u8> {
 
 /// The 18-nt PBS probe of a tRNA call: reverse complement of its last 15 nt
 /// + CCA, for genes of 70-120 bp with a standard amino acid; None otherwise.
+/// The gene ends at the discriminator (`TrnaCall::gene`): a genomic C, CC or
+/// CCA that ARAGORN adds to the call is not part of it.
 pub fn probe18(c: &TrnaCall) -> Option<Vec<u8>> {
-    let len = c.seq.len();
+    let gene = c.gene().as_bytes();
+    let len = gene.len();
     if !(70..=120).contains(&len) || c.amino_acid().is_none() {
         return None;
     }
-    let tail = &c.seq.as_bytes()[len - 15..];
+    let tail = &gene[len - 15..];
     if !tail.iter().all(|b| b"ACGT".contains(b)) {
         return None;
     }
@@ -96,10 +99,15 @@ impl Probes {
                 (k, v)
             })
             .collect();
-        let mut short: HashMap<Vec<u8>, Vec<(u8, Vec<String>, Vec<u8>)>> = HashMap::new();
-        let mut seed: HashMap<Vec<u8>, Vec<(Vec<u8>, usize)>> = HashMap::new();
+        // The 12-nt test cannot tell 18-mers that share their first 12 nt apart, so each 12-mer
+        // carries the types of all of them.
+        let mut by12: HashMap<&[u8], std::collections::BTreeSet<&String>> = HashMap::new();
         for (p, names) in &full {
-            let k = &p[..K];
+            by12.entry(&p[..K]).or_default().extend(names.iter());
+        }
+        let mut short: HashMap<Vec<u8>, Vec<(u8, Vec<String>, Vec<u8>)>> = HashMap::new();
+        for (k, names) in &by12 {
+            let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
             short.entry(k.to_vec()).or_default().push((0, names.clone(), k.to_vec()));
             for i in 3..K {
                 for &b in b"ACGT" {
@@ -110,6 +118,9 @@ impl Probes {
                     }
                 }
             }
+        }
+        let mut seed: HashMap<Vec<u8>, Vec<(Vec<u8>, usize)>> = HashMap::new();
+        for p in full.keys() {
             for o in [0, 6, 12] {
                 seed.entry(p[o..o + 6].to_vec()).or_default().push((p.clone(), o));
             }
@@ -148,7 +159,9 @@ impl Probes {
     }
 
     /// Best 18-nt edit distance (<= 2) on a window laid out like `short_hit`'s
-    /// but `MAX_EDITS` bases longer.
+    /// but `MAX_EDITS` bases longer.  A seed places the probe's start; that
+    /// start may lie `MAX_EDITS` outside -PRE..+POST, since an indel before
+    /// the seed moves it by as much (so the 18-mer is searched over -7..+17).
     fn full_edist(&self, w: &[u8]) -> Option<usize> {
         let mut best: Option<usize> = None;
         let mut tried: HashSet<(&[u8], i64)> = HashSet::new();
@@ -247,6 +260,7 @@ pub struct LibEntry {
     pub id: String,
     /// ARAGORN name without "tRNA-", e.g. "Met(cat)"
     pub kind: String,
+    /// the gene up to its discriminator (`TrnaCall::gene`)
     pub seq: String,
     /// (sequence name, start, end, minus) of every copy
     pub copies: Vec<(String, i64, i64, bool)>,
@@ -275,16 +289,18 @@ pub fn build_library(calls: &[(&str, &TrnaCall)], hits: &[(Option<&PbsHit>, bool
             }
         }
     }
+    // keyed on the gene without ARAGORN's C / CC / CCA extension, so copies that differ only in
+    // the bases after the discriminator are one entry
     let mut by_seq: HashMap<&str, usize> = HashMap::new();
     let mut lib: Vec<LibEntry> = Vec::new();
     for (name, c) in calls {
-        let i = *by_seq.entry(c.seq.as_str()).or_insert_with(|| {
+        let i = *by_seq.entry(c.gene()).or_insert_with(|| {
             let probe12 = probe18(c).map(|p| p[..K].to_vec());
             let u = probe12.as_ref().and_then(|p| usage.get(p.as_slice())).copied().unwrap_or_default();
             lib.push(LibEntry {
                 id: String::new(),
                 kind: c.short_name().to_string(),
-                seq: c.seq.clone(),
+                seq: c.gene().to_string(),
                 copies: Vec::new(),
                 intron: c.intron_len > 0,
                 probe12,
@@ -351,7 +367,43 @@ mod tests {
     use super::*;
 
     fn call(seq: &str, name: &str) -> TrnaCall {
-        TrnaCall { start: 1, end: seq.len() as i64, minus: false, name: name.into(), energy: 150.0, intron_len: 0, seq: seq.into() }
+        TrnaCall { start: 1, end: seq.len() as i64, minus: false, name: name.into(), energy: 150.0, intron_len: 0, seq: seq.into(), tail_ext: 0 }
+    }
+
+    #[test]
+    fn genomic_tail_does_not_shift_the_probe() {
+        let gene = format!("{}{}", "A".repeat(60), "CCCGGGTTCGATCCC");
+        let plain = call(&gene, "tRNA-Met(cat)");
+        let p = probe18(&plain).unwrap();
+        assert_eq!(p, rc(b"CCCGGGTTCGATCCCCCA"));
+        for tail in ["C", "CC", "CCA"] {
+            let mut c = call(&format!("{gene}{tail}"), "tRNA-Met(cat)");
+            c.tail_ext = tail.len();
+            assert_eq!(probe18(&c).unwrap(), p, "{tail}");
+            // one library entry, two copies
+            let lib = build_library(&[("chr1", &plain), ("chr2", &c)], &[]);
+            assert_eq!((lib.len(), lib[0].copies.len(), lib[0].seq.as_str()), (1, 2, gene.as_str()));
+        }
+    }
+
+    #[test]
+    fn types_sharing_the_12_nt_are_all_named() {
+        // two genes with the same last 9 nt (12 with CCA) and different bases before them
+        let a = format!("{}{}", "A".repeat(60), "CCCGGGTTCGATCCC");
+        let b = format!("{}{}", "A".repeat(60), "GGAGGGTTCGATCCC");
+        let probes = Probes::from_calls(&[call(&a, "tRNA-Lys(ctt)"), call(&b, "tRNA-Lys(ttt)")]);
+        assert_eq!(probes.len(), 2);
+        let pbs = rc(b"CCCGGGTTCGATCCCCCA");
+        let mut text = b"ACGTACGTAC".to_vec();
+        let l1e = text.len() - 1;
+        text.extend_from_slice(b"TT");
+        text.extend_from_slice(&pbs);
+        text.extend_from_slice(b"ACGTACGTACGTACGTACGTACGTACGT");
+        let hi = text.len() - 1;
+        let (h, _) = probes.annotate(&text, l1e, hi - 5, 0, hi, "+");
+        let h = h.unwrap();
+        assert_eq!((h.mm12, h.offset), (0, 2));
+        assert_eq!(h.trnas, vec!["Lys(ctt)".to_string(), "Lys(ttt)".to_string()]);
     }
 
     #[test]

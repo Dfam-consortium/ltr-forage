@@ -991,9 +991,22 @@ fn is_acgt(c: u8) -> bool {
     matches!(c, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't')
 }
 
+/// Longest stretch scanned as one contig.  The wave aligner keeps antidiagonals (twice a
+/// position) in an i32, as FasTAN does, so a contig must stay under 2^30 bp; longer N-free runs
+/// are scanned as pieces of this length that overlap by `PIECE_OVERLAP`.
+const MAX_PIECE: usize = 1 << 29;
+/// Overlap of two pieces: several of the longest units (30 kb), so an array at a cut has at least
+/// two units in one of the pieces.  An array across a cut is reported by both pieces, each up to
+/// its own end; the mask is their union.
+const PIECE_OVERLAP: usize = 1 << 20;
+
 /// Tandem arrays in every sequence of `text` (sequence k is
 /// text[starts[k]..starts[k+1]]), in sequence coordinates, sorted.
 pub fn tandem_arrays(text: &[u8], starts: &[usize]) -> Vec<TandemArray> {
+    tandem_arrays_cut(text, starts, MAX_PIECE, PIECE_OVERLAP)
+}
+
+fn tandem_arrays_cut(text: &[u8], starts: &[usize], max_piece: usize, overlap: usize) -> Vec<TandemArray> {
     // contigs: maximal A/C/G/T runs
     let mut contigs: Vec<(usize, usize, usize)> = Vec::new(); // (seq, start, end) in text
     let mut fq = [0u64; 4];
@@ -1014,8 +1027,15 @@ pub fn tandem_arrays(text: &[u8], starts: &[usize]) -> Vec<TandemArray> {
                 }] += 1;
                 i += 1;
             }
-            if i > s {
-                contigs.push((k, s, i));
+            // one contig, or overlapping pieces of a run too long for the aligner's coordinates
+            let mut a = s;
+            while i > a {
+                let e = if i - a > max_piece { a + max_piece } else { i };
+                contigs.push((k, a, e));
+                if e == i {
+                    break;
+                }
+                a = e - overlap;
             }
         }
     }
@@ -1046,6 +1066,8 @@ pub fn tandem_arrays(text: &[u8], starts: &[usize]) -> Vec<TandemArray> {
         .flatten()
         .collect();
     all.sort_unstable_by_key(|t| (t.seq, t.bbeg, t.aend));
+    // an array inside the overlap of two pieces is found by both
+    all.dedup_by_key(|t| (t.seq, t.bbeg, t.aend));
     all
 }
 
@@ -1089,6 +1111,33 @@ mod tests {
         let a = arr[0];
         assert!((165..=177).contains(&a.period), "{arr:?}");
         assert!(a.bbeg <= 20_000 + 171 && a.aend >= 20_000 + 171 * 29, "{arr:?}");
+    }
+
+    #[test]
+    fn long_contig_is_scanned_in_overlapping_pieces() {
+        // one 60 kb contig with an array at 20,000..25,130, scanned whole and as pieces of
+        // 22,000 overlapping by 8,000 (cuts at 22,000 inside the array, then 36,000 and 50,000)
+        let unit = rand_seq(171, 7);
+        let mut t = rand_seq(20_000, 1);
+        for i in 0..30 {
+            t.extend(mutate(&unit, 12, 100 + i));
+        }
+        t.extend(rand_seq(35_000, 2));
+        let cover = |arr: &[TandemArray]| {
+            let mut c = vec![false; t.len()];
+            for a in arr {
+                c[a.bbeg..a.aend].iter_mut().for_each(|x| *x = true);
+            }
+            c
+        };
+        let whole = cover(&tandem_arrays(&t, &[0]));
+        let pieces = tandem_arrays_cut(&t, &[0], 22_000, 8_000);
+        let cut = cover(&pieces);
+        let n = |c: &[bool]| c.iter().filter(|&&x| x).count();
+        assert!(n(&whole) >= 171 * 28, "{}", n(&whole));
+        // the union of the pieces' arrays masks what the whole contig's does, give or take a unit
+        let differ = whole.iter().zip(&cut).filter(|(a, b)| a != b).count();
+        assert!(differ <= 171, "{} positions differ: {pieces:?}", differ);
     }
 
     #[test]

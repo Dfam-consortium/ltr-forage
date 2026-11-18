@@ -7,7 +7,9 @@ LTRs are (solo LTRs, two per element).  An internal model whose genome copies (m
 exceed <max> per element of its cluster is mostly some other repeat (mm10: an exemplar internal of L1 sequence,
 5,999 copies per element, masked 133 Mb outside the curated LTRs; no other model in six genomes went above 707).
 models.fa is rewritten without them; the LTR models are kept."""
-import sys, re, json, bisect, collections, statistics
+import sys, os, json, collections, statistics
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from records import element_lookup
 mf, depf, clf, scale, mx, outf = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5]), sys.argv[6]
 
 dep = {}
@@ -16,15 +18,7 @@ for l in open(depf):
     x = [int(t) for t in v.split(',') if t]
     dep[n] = statistics.median(x) if x else 0
 cl = json.load(open(clf)); size = collections.Counter(cl.values())
-iv = collections.defaultdict(list)
-for k in cl:
-    c, s, e = re.match(r'(.+):(\d+)\.\.(\d+)$', k).groups(); iv[c].append((int(s), int(e), k))
-for v in iv.values(): v.sort()
-def element(name):   # the element a model's origin record lies in
-    c, s = re.match(r'(.+):(\d+)\.\.', name).groups(); s = int(s); v = iv[c]
-    i = bisect.bisect_right(v, (s, float('inf'), '')) - 1
-    while i >= 0 and v[i][1] < s: i -= 1
-    return v[i][2] if i >= 0 else None
+element = element_lookup(cl)   # the element a model's origin record is of (env TSV: the ltr-forage table)
 
 recs, drop = [], []
 for l in open(mf):

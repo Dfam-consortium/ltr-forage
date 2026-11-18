@@ -6,7 +6,9 @@ A raw singleton (a pre-clustering cluster of one element) is dropped when its el
 longer than 9 kb, or (pbs) LTR identity < 93% and no PBS, or (strict) identity < 90% or no PBS.
 elem/clusters_raw.json, lib.fa and exemplar_raw.fa are rewritten from copies of the originals kept as
 <file>.all, so a rerun starts from the full raw library; --restore puts the originals back."""
-import sys, os, re, json, csv, bisect, shutil, collections
+import sys, os, json, csv, shutil, collections
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from records import element_lookup
 d, tier = sys.argv[1], sys.argv[2]
 FILES = ['elem/clusters_raw.json', 'lib.fa', 'exemplar_raw.fa']
 for f in FILES:
@@ -26,15 +28,7 @@ def admit(k):   # tier.py's rule
     return (float(x['identity']) >= 90 and pbs) if tier == 'strict' else (float(x['identity']) >= 93 or pbs)
 drop = {k for k, c in raw.items() if size[c] == 1 and not admit(k)}
 
-iv = collections.defaultdict(list)
-for k in raw:
-    c, s, e = re.match(r'(.+):(\d+)\.\.(\d+)$', k).groups(); iv[c].append((int(s), int(e), k))
-for v in iv.values(): v.sort()
-def element(name):   # the element a record (LTR or internal region) lies in
-    c, s = re.match(r'(.+):(\d+)\.\.', name).groups(); s = int(s); v = iv[c]
-    i = bisect.bisect_right(v, (s, float('inf'), '')) - 1
-    while i >= 0 and v[i][1] < s: i -= 1
-    return v[i][2] if i >= 0 else None
+element = element_lookup(raw, os.path.join(d, 'cand.tsv'))   # the element a record (LTR or internal region) is of
 
 def filter_fasta(p):
     n = kept = 0; keep = True

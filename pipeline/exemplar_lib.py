@@ -21,7 +21,8 @@ for e,c in clus.items(): members[c].append(e)
 n_out=0
 with open(outfa,'w') as out:
     for c,v in members.items():
-        best=max(v,key=lambda e: len(seqs.get(elem_recs[e][1],'')))
+        # longest internal; among equals (e.g. every internal dropped) the member with most sequence left
+        best=max(v,key=lambda e: (len(seqs.get(elem_recs[e][1],'')), sum(len(seqs.get(r,'')) for r in elem_recs[e])))
         for rec in elem_recs[best]:
             if rec in seqs and len(seqs[rec])>=50:
                 out.write(f">{names[rec]}\n{seqs[rec]}\n"); n_out+=1

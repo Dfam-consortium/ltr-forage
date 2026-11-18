@@ -23,6 +23,8 @@ column gate depends on (mm10, 2026-10-24: a 2,006-copy chrY INT cluster took 107
 """
 import argparse, collections, json, os, random, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from records import NAME, element_lookup
 
 RC = str.maketrans('ACGTNacgtn', 'TGCANtgcan')
 
@@ -37,15 +39,20 @@ def read_fa(path):
     return {k: ''.join(seqs[k]) for k in order}
 
 
-def orient(names, seqs, k=12):
+def kmers(x, k=12):
+    return {x[i:i + k] for i in range(len(x) - k + 1)}
+
+
+def turned(x, ref):
+    """x, or its reverse complement when that shares more k-mers with the k-mer set ref."""
+    r = x[::-1].translate(RC)
+    return x if len(kmers(x) & ref) >= len(kmers(r) & ref) else r
+
+
+def orient(names, seqs):
     """Turn each record to share more k-mers with the longest record."""
-    km = lambda x: {x[i:i + k] for i in range(len(x) - k + 1)}
-    ref = km(max((seqs[n].upper() for n in names), key=len))
-    out = []
-    for n in names:
-        x = seqs[n].upper(); r = x[::-1].translate(RC)
-        out.append((n, x if len(km(x) & ref) >= len(km(r) & ref) else r))
-    return out
+    ref = kmers(max((seqs[n].upper() for n in names), key=len))
+    return [(n, turned(seqs[n].upper(), ref)) for n in names]
 
 
 def gate(stk, seq):
@@ -84,14 +91,7 @@ def main():
     clus = json.load(open(a.clusters))
     members = collections.defaultdict(list)
     for e, c in clus.items(): members[c].append(e)
-    by_seq = collections.defaultdict(list)
-    for e in clus:
-        m = re.match(r'(\S+):(\d+)\.\.(\d+)$', e); by_seq[m[1]].append((int(m[2]), int(m[3]), e))
-
-    def elem_of(rec):
-        m = re.match(r'(\S+):(\d+)\.\.(\d+)_(LTR|INT)$', rec)
-        for s, t, e in by_seq.get(m[1], ()):
-            if s <= int(m[2]) and int(m[3]) <= t: return e
+    elem_of = element_lookup(clus)   # env TSV: the ltr-forage table
 
     recs = collections.defaultdict(lambda: {'LTR': [], 'INT': []})
     for r in raw:
@@ -103,8 +103,17 @@ def main():
             f = l.rstrip('\n').split('\t')
             if f[0] != 'cluster' and f[-1] == 'sd': sd.add(f[0])
 
+    # one LTR and one INT core record per cluster.  Where the core holds both LTRs of the exemplar (step 13:
+    # exemplar_raw.fa), the model takes the 5' LTR's name, as tier.py keeps the 5' LTR of the others:
+    # family.py pairs an internal with the LTR that ends where it starts.  (The last LTR record was taken
+    # before, the 3' one, and each representative's LTR and internal then went to separate families.)
+    start = lambda r: int(NAME.match(r)[2])
     core_recs = collections.defaultdict(dict)
-    for r in core: core_recs[clus[elem_of(r)]][r[-3:]] = r
+    for r in core:
+        e = elem_of(r)
+        if e is None: sys.exit(f'consensus_models.py: core record {r} belongs to no clustered element')
+        d = core_recs[clus[e]]; kind = r[-3:]
+        if kind not in d or (kind == 'LTR' and start(r) < start(d[kind])): d[kind] = r
 
     def inputs(c, kind):
         names = [r for e in members[c] for r in recs[e][kind] if len(raw[r]) >= 50]
@@ -123,13 +132,14 @@ def main():
         names = inputs(c, kind)
         if len(names) < 2: return None
         tag = re.sub(r'[^\w.-]', '_', f'c{c}_{kind}')
-        fa, stk, out = (os.path.join(a.work, tag + x) for x in ('.fa', '.stk', '.cons.fa'))
+        fa, stk, out, ok = (os.path.join(a.work, tag + x) for x in ('.fa', '.stk', '.cons.fa', '.ok'))
         text = ''.join(f'>{n}\n{x}\n' for n, x in orient(names, raw))
-        # reuse a finished consensus built from the same input (reruns with --from models)
-        cached = all(os.path.exists(f) for f in (fa, stk, out)) and open(fa).read() == text \
-            and os.path.getmtime(out) >= os.path.getmtime(fa)
+        # reuse a finished consensus built from the same input (reruns with --from models): <tag>.ok is written
+        # when te-composer has exited with status 0, so a killed run's partial output is not taken for one.
+        # (Work directories from before the marker rebuild their consensus once.)
+        cached = all(os.path.exists(f) for f in (fa, stk, ok)) and open(fa).read() == text
         if not cached:
-            for f in (stk, out):
+            for f in (stk, out, ok):
                 if os.path.exists(f): os.remove(f)
             with open(fa, 'w') as fh: fh.write(text)
             # a few large clusters dominate the run time (rice: one 247-copy INT took 1h54m on 2 threads), so
@@ -138,9 +148,14 @@ def main():
             r = subprocess.run([a.te_composer, '--silent', '--threads', str(th), '--name', tag, '--consensus', out,
                                 '--format', 'fasta', fa, stk], stderr=open(os.path.join(a.work, tag + '.log'), 'w'))
             if r.returncode: return None
+            open(ok, 'w').close()
         if not os.path.exists(out): return None   # e.g. nothing aligns above te-composer's minimum score
         s = ''.join(l.strip() for l in open(out) if not l.startswith('>'))
-        return gate(stk, s) if s else None
+        if not s: return None
+        # in the strand of the cluster's core record: the LTR and the internal core records are of one element,
+        # so a cluster's two models come out in the same strand (each kind was left in the strand of its own
+        # longest copy, and the two could be reverse complements of each other)
+        return turned(gate(stk, s), kmers(core[core_recs[c][kind]].upper()))
 
     premade = read_fa(a.premade) if a.premade else {}
     jobs = [(c, k) for c in core_recs if c not in sd and len(members[c]) >= a.min_cons for k in ('LTR', 'INT')

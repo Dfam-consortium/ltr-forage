@@ -23,6 +23,8 @@ cluster on zebra finch and rice has at most 88% of its members flank-paired).
 On zebra finch (2026-10-19) 8 of 74 clusters were flagged, holding 9.7 of the 15.4 Mb masked outside the
 curated LTR annotation (one 19-copy tandem array of a 13.5 kb block, flanks 99.6% identical); rice: 4 of
 218, all two-copy pairs.  Single-element clusters cannot be tested this way.
+Flanks are compared same side to same side, so a block duplicated in inverted orientation (its left flank
+the reverse complement of the other copy's right flank) is not flagged; none has been seen.
 """
 import argparse, collections, itertools, json, os
 
