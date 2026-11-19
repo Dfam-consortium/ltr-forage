@@ -280,6 +280,14 @@ pub fn six_frames(seq: &[u8]) -> [Vec<u8>; 6] {
 /// difference is weak hits, which old elements such as gorilla's depend on.
 const SEED_P: f64 = 0.01;
 
+/// nail's `--prog-f`: its progressive seeding aligns a profile's prefilter
+/// results in rounds and stops when under this fraction of a round are
+/// hits (nail's default 0.01).  On a large target set that stops before
+/// strong hits further down the list: on gorilla (2.7 M frames) 0 brings
+/// back 97 hits, 30 of them under E = 1e-5, loses none, and costs no time
+/// or memory.
+const PROG_F: &str = "0";
+
 /// Where nail and MMseqs2 are, and where nail works.
 /// Oldest nail the search runs with.
 pub const NAIL_MIN: (u32, u32, u32) = (0, 7, 1);
@@ -311,7 +319,7 @@ pub fn find_program(name: &str) -> Result<PathBuf> {
 /// Search the six frames of every sequence in `seqs` (None: not searched)
 /// against the profiles in `hmm` with one nail run, and classify each
 /// sequence's hits.  `num_targets` is the database size used for the
-/// E-value, as hmmsearch would count it.
+/// E-value (nail's -Z).
 pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usize, max_e: f64) -> Result<Vec<Option<DomainCall>>> {
     std::fs::create_dir_all(&nail.work).with_context(|| format!("creating {}", nail.work.display()))?;
     // nail 0.7.1 panics on a blank line in the profile file (LTR_retriever's
@@ -370,7 +378,7 @@ pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usiz
         .arg("search")
         .args(["-t", &nail.threads.max(1).to_string()])
         .args(["-E", &max_e.to_string(), "-Z", &num_targets.max(1).to_string(), "-S", &SEED_P.to_string()])
-        .args(["-X", "--use-accession"])
+        .args(["-X", "--use-accession", "--prog-f", PROG_F])
         .arg("--mmseqs-path").arg(&nail.mmseqs)
         .arg("--tmp-dir").arg(nail.work.join("tmp"))
         .arg("--tbl-out").arg(&tbl)

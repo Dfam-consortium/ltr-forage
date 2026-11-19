@@ -153,8 +153,13 @@ os.makedirs(P('polya_family'), exist_ok=True)
 sample = sorted(random.Random(a.seed).sample(polya, min(a.sample, len(polya))))
 want = [(get(rows[i], 'seq'), int(get(rows[i], 'lltr_start')), int(get(rows[i], 'lltr_end'))) for i in sample]
 got = fetch(want)
+# two sampled candidates can share their left LTR (gorilla: 1 in 2,000); each copy keeps its own record, as before,
+# under a numbered name, since rmblastn >= 3.1 refuses a database with a repeated sequence name
+seen = collections.Counter()
 with open(P('polya_family', 'polya.fa'), 'w') as fo:
-    for c, s, e in want: fo.write(f'>{c}:{s}..{e}\n{got[c, s, e]}\n')
+    for c, s, e in want:
+        seen[c, s, e] += 1; k = seen[c, s, e]
+        fo.write(f'>{c}:{s}..{e}{"" if k == 1 else f"_copy{k}"}\n{got[c, s, e]}\n')
 
 def coverage(fasta, hits):
     """{LTR record: share of it covered by >= --min-depth of the sampled LTRs}, from a search of `fasta`."""

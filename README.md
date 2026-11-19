@@ -490,15 +490,39 @@ file (102 Pfam profiles), the default until 2026-11-17.
 ltr-forage translates each element plus `--domain-flank` bases (default 50)
 on each side in six frames, with stop codons as X, writes the frames as a
 protein FASTA, and searches it with nail's full pipeline (MMseqs2 seeds, cloud
-search, Forward, composition-bias correction), taking six frames per
-candidate as the database size for the E-value, as hmmsearch would, and
-with nail's seed filter at P = 0.01 instead of its default 1e-4 (twice the
-time, half as many weak hits lost against hmmsearch). Each LTR
+search, Forward, composition-bias correction), with a fixed database
+size for the E-value (`--domain-z`, default 120,000: six frames of 20,000
+candidates), with nail's seed filter at P = 0.01 instead of its default
+1e-4 (twice the time, half as many weak hits lost against hmmsearch), and
+with nail's progressive seeding never stopping early (`--prog-f 0`). Each LTR
 is searched alone in the same run (see the coding-LTR veto below). Hits with
 an E-value at or below `--domain-evalue` (default 0.05) count. `nail` and
 `mmseqs` are found on PATH or given with `--nail` and `--mmseqs`; the frames
 and nail's databases go to a subdirectory of `--temp-dir` (default:
 `$TMPDIR`, else `/tmp`), removed afterwards.
+
+The database size is a constant so that a hit's E-value, and with it
+whether an element is kept, does not depend on how many other candidates
+the genome has. Until 2026-11-18 it was six frames per candidate of the
+run (`--domain-z 0` gives that rule): gorilla's 157,206 candidates made
+every E-value 7.9 times what it is now, Arabidopsis' 5,573 made it 0.28
+times. The constant sits in the range the candidate counts of the tuning
+genomes had when the thresholds were set (13,000 to 29,000). The library
+scores with the constant have not been run yet.
+
+**Known limitation.** On a large target set nail does not report some
+strong hits that it reports when the same sequences are searched in a
+smaller file.  On gorilla (2.7 M frames, `TEfam.hmm`) 51 of about 11,500
+candidate and profile hits were missing, the best at E = 2.1e-14; 50 of
+them came back when their candidates were searched alone.  Two causes:
+nail's progressive seeding stops early for a profile with many targets
+(ltr-forage now runs it with `--prog-f 0`, which brings back 21), and
+MMseqs2 gives no seed for the rest.
+The nail authors know of it; the MMseqs2 part stays until nail drops or
+integrates MMseqs2.  Splitting the search is not a remedy (it loses more
+hits than it brings back).  In that run 15 gorilla and 5 mouse elements
+with LTR-annotated LTRs lost their evidence this way, 12 and 4 of them
+kept again with `TEdomains.hmm` through other hits.
 
 On rice (39,924 frames, TEfam.hmm's 102 profiles, 8 threads) nail takes 36 s
 and 206 CPU seconds at its default seed filter (70 s and 467 at 0.01),
@@ -957,6 +981,7 @@ Protein domains (step 8b):
       --domain-hmm <FILE>   HMMER3 file of protein profiles [default: data/TEdomains.hmm]
       --no-domains          Skip the domain search
       --domain-evalue <E>   E-value threshold for a domain hit [default: 0.05]
+      --domain-z <N>        Database size for the domain E-values (nail's -Z); 0: six frames per candidate of this run [default: 120000]
       --domain-flank <BP>   Bases added on each side of the element before translation [default: 50]
       --nail <PATH>         nail binary (a path, or a name on PATH) [default: nail]
       --mmseqs <PATH>       MMseqs2 binary nail seeds with [default: mmseqs]
@@ -1247,7 +1272,13 @@ figure.
 15. **Nested-LTR vote.**  A first element clustering excises LTRs nested in
     internals by vote.
 16. **Element clustering.**  Clusters and one exemplar per cluster; each big
-    cluster's members rejoin the cluster of their representative.
+    cluster's members rejoin the cluster of their representative.  The
+    clustering links elements that cover each other, then attaches each
+    remaining single element to the cluster that covers it.  A consensus
+    representative is never attached that way: it stands for a whole
+    cluster, and attaching it would merge two clusters into one set of
+    exemplars (until 2026-11-18 it was attached, 4 to 22 times a tuning
+    genome).
 17. **Flank filter.**  A cluster is dropped when most of its pairs, or
     every one of its copies, share both flanks (300 bp at 80% identity)
     with another copy: the copies are one duplicated locus, not independent

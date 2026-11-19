@@ -203,6 +203,14 @@ struct Args {
     #[arg(long, default_value_t = 0.05, value_name = "E")]
     domain_evalue: f64,
 
+    /// Database size for the domain E-values (nail's -Z).  A constant, so
+    /// that a hit's E-value does not depend on how many other candidates
+    /// the genome has; the default is six frames of 20,000 candidates.
+    /// 0: six frames per candidate of this run, as hmmsearch would count
+    /// them (the rule before this option)
+    #[arg(long, default_value_t = 120_000, value_name = "N")]
+    domain_z: usize,
+
     /// Bases added on each side of the element before translation
     #[arg(long, default_value_t = 50, value_name = "BP")]
     domain_flank: usize,
@@ -364,7 +372,7 @@ fn writable(dir: &std::path::Path) -> bool {
 /// Options that only steps skipped by --ltrharvest read (clap ids, i.e. field names).
 const NOT_IN_LTRHARVEST: &[&str] = &[
     "dedup_tol", "reextend_ltr_max", "reextend_vicinity", "reextend_first", "reextend_first_margin", "trim_window",
-    "trim_matches", "internal_stats", "domain_hmm", "no_domains", "domain_evalue", "domain_flank", "nail", "mmseqs",
+    "trim_matches", "internal_stats", "domain_hmm", "no_domains", "domain_evalue", "domain_z", "domain_flank", "nail", "mmseqs",
     "temp_dir", "keep_coding_ltrs", "keep", "internal_gap_max", "tandem_max", "no_polya_veto", "domain_search_vetoed",
     "no_pbs_trna", "pbs_domain_strand", "trna_intron_max",
 ];
@@ -1011,7 +1019,7 @@ where
                 seqs.push((!skip).then(|| &text[l2s..=l2e]));
             }
         }
-        let mut calls = domain::search(&nail, std::path::Path::new(path), &seqs, 6 * n.max(1), args.domain_evalue)?;
+        let mut calls = domain::search(&nail, std::path::Path::new(path), &seqs, if args.domain_z > 0 { args.domain_z } else { 6 * n.max(1) }, args.domain_evalue)?;
         let ltr_hits: Vec<Vec<String>> = if ltrs {
             calls[n..]
                 .chunks(2)

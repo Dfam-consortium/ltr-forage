@@ -2,7 +2,13 @@
 # and whose LTRs cover the shorter LTR. Phase 2: attach each remaining singleton element to the
 # cluster whose members cover the singleton's own internal and LTR records; attachments never
 # merge clusters.
-# usage: step4.py <int_hits.tsv> <ltr_hits.tsv> [clusters.json]   (env TSV: the ltr-forage table, cand.tsv)
+# --reps <reps.json> (stage B, step 16): the elements named there are consensus representatives, each
+# standing for a whole raw cluster.  One that phase 1 leaves alone is a cluster, not a singleton, and is
+# not attached: attaching it merged its raw cluster into the other one, which then got one set of
+# exemplars (zebra finch lost an 11-kb internal that way).  Step 15's call does not pass --reps: its
+# clusters only choose who votes on nested cuts.
+# usage: step4.py <int_hits.tsv> <ltr_hits.tsv> [clusters.json] [--reps reps.json]
+#        (env TSV: the ltr-forage table, cand.tsv)
 # The functions are shared with greedy_cluster.py (step 12 on very large raw libraries).
 import os, csv, collections, sys, json
 
@@ -67,6 +73,9 @@ def report(label, elems, member):
     return cores
 
 def main():
+    reps = set()
+    if '--reps' in sys.argv:
+        i = sys.argv.index('--reps'); reps = set(json.load(open(sys.argv[i + 1]))); del sys.argv[i:i + 2]
     int_hits, ltr_hits = sys.argv[1], sys.argv[2]
     if 'TSV' not in os.environ: sys.exit('step4.py: set TSV to the ltr-forage table (cand.tsv)')
     elems, elem_recs = load_elements(os.environ['TSV'])
@@ -82,17 +91,21 @@ def main():
             ra, rb = find(a), find(b)
             if ra != rb: parent[ra] = rb
     cores = report('phase 1 (INT both 80%, LTR shorter 80%)', elems, find)
-    # phase 2: attach singletons
-    attach = {}
+    # phase 2: attach singletons.  A consensus representative stands for a raw cluster and is never one.
+    attach = {}; rep_alone = set()
     cand = collections.defaultdict(lambda: collections.defaultdict(float))
     for (a, b), d in cov.items():
         if len(cores[find(a)]) != 1: continue
+        if f"{a[0]}:{a[1]}..{a[2]}" in reps:
+            if covered(d) is not None and len(cores[find(b)]) > 1: rep_alone.add(a)
+            continue
         rb = find(b)
         if len(cores[rb]) == 1: continue
         sc = covered(d)
         if sc is not None: cand[a][rb] = max(cand[a][rb], sc)
     for a, c in cand.items(): attach[a] = max(c.items(), key=lambda x: x[1])[0]
-    print(f"phase 2 attached {len(attach)} of {sum(1 for v in cores.values() if len(v)==1)} singletons")
+    print(f"phase 2 attached {len(attach)} of {sum(1 for v in cores.values() if len(v)==1)} singletons"
+          + (f" ({len(rep_alone)} consensus representatives that a cluster covers were not attached)" if reps else ''))
     report('phase 1 + phase 2 attachment', elems, lambda e: attach.get(e, find(e)))
     if len(sys.argv) > 3:
         json.dump({f"{e[0]}:{e[1]}..{e[2]}": f"{r[0]}:{r[1]}..{r[2]}" for e in elems for r in [attach.get(e, find(e))]},

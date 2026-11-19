@@ -1,0 +1,125 @@
+#accession	class	role	status	evidence	source
+PF00077	LTR	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/ERV1 102, LTR/ERVK 88, LTR/Gypsy 70, LTR/Copia 4, LTR/Caulimovirus 4
+PF00552	LTR	core	added	retroviral integrase DNA binding
+PF00665	LTR	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 1816, LTR/Copia 1787, LTR/ERV1 126, LTR/ERVK 101, LTR/Pao 86
+PF02022	LTR	core	added	retroviral integrase N-terminal zinc binding
+PF06815	LTR	core	added	RT connection domain
+PF06817	LTR	core	added	RT thumb ( ERVK mostly )
+PF13683	LTR	core	kept	legacy LTR; RepeatPeps LTR/Gypsy 25, LTR/Copia 7, ARTEFACT 3, DNA/Maverick 2
+PF17921	LTR	core	added	integrase zinc binding ( Gypsy, Pao, ERV )
+PF19317	LTR	core	added	retroviral capsid C-terminal
+PF02160	LTR/Caulimovirus	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Caulimovirus 3
+PF07727	LTR/Copia	core	kept	legacy LTR/Copia; RepeatPeps LTR/Copia 1968, LTR/Ngaro 1
+PF13976	LTR/Copia	core	kept	legacy LTR/Copia; RepeatPeps LTR/Copia 1740
+PF14223	LTR/Copia	core	kept	legacy LTR/Copia; RepeatPeps LTR/Copia 1513, LTR/Ngaro 1
+PF14244	LTR/Copia	core	kept	legacy LTR/Copia; RepeatPeps LTR/Copia 294
+PF17241	LTR/Copia	core	added	Ty5 gag
+PF03276	LTR/ERV-Foamy	core	added	spumavirus gag
+PF01140	LTR/ERV1	core	added	gammaretroviral matrix
+PF02093	LTR/ERV1	core	added	gammaretroviral capsid
+PF00607	LTR/ERVK	core	added	retroviral capsid
+PF02337	LTR/ERVK	core	added	betaretroviral GAG p10
+PF00385	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 256, DNA/Maverick 18, LTR/Copia 1	TEfam.hmm
+PF03732	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 560	TEfam.hmm
+PF08284	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 383
+PF09668	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 36
+PF12384	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 3
+PF13650	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 380, LTR/Pao 7, LTR/ERV1 4, LTR/ERVL 1	TEfam.hmm
+PF13975	LTR/Gypsy	core	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 447, LTR/ERV1 15, LTR/Pao 2, LTR/ERVL 1, LTR/ERVK 1
+PF17917	LTR/Gypsy	core	added	Gypsy/retroviral RT RNase H
+PF17919	LTR/Gypsy	core	added	Gypsy/retroviral RT RNase H
+PF19259	LTR/Gypsy	core	added	Ty3 capsid
+PF22938	LTR/Gypsy	core	added	Ty3/Gypsy integrase C-terminal
+PF05380	LTR/Pao	core	added	Pao RNase H-like
+PF00429	LTR	accessory	added	retroviral env
+PF01519	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+# removed 2026-11-17 (README.md, "Removed"): Atrophin-1, a host protein family, not a TE domain
+#PF03154	LTR	accessory	removed	legacy LTR; RepeatPeps no hits; the only domain hit of 64 kept mm10 elements, one an L1-flanked pair
+PF04102	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF04111	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF05837	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF06827	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF07889	LTR	accessory	kept	legacy LTR; RepeatPeps LINE/L1 1, LINE/RTE-X 1
+PF09337	LTR	accessory	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 101, LTR/ERV1 32, LTR/Pao 2, LTR/ERVK 1
+PF11180	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF12425	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF12435	LTR	accessory	kept	legacy LTR; RepeatPeps no hits
+PF20167	LTR	accessory	added	plant retrotransposon-related ( Copia and Gypsy )
+PF08847	LTR/Copia	accessory	kept	legacy LTR/Copia; RepeatPeps no hits
+PF13917	LTR/Copia	accessory	kept	legacy LTR/Copia; RepeatPeps no hits
+PF13961	LTR/Copia	accessory	kept	legacy LTR/Copia; RepeatPeps LTR/Copia 183	TEfam.hmm
+PF03408	LTR/ERV-Foamy	accessory	added	foamy virus env
+PF14787	LTR/ERVK	accessory	kept	legacy LTR/Copia; RepeatPeps LTR/ERVK 85, LTR/Copia 2, LTR/Gypsy 1	TEfam.hmm
+PF03578	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF04195	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 14, DNA/hAT-Ac 1
+PF04513	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF04582	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF05377	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF05754	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits	TEfam.hmm
+PF06882	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF07197	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps LTR/Gypsy 2
+PF07253	LTR/Gypsy	accessory	added	Drosophila gypsy env
+PF08149	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF10046	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF11835	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF12353	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF15450	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF16025	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF17150	LTR/Gypsy	accessory	kept	legacy LTR/Gypsy; RepeatPeps no hits
+PF03564	LTR/Pao	accessory	added	Pao ORF domain ( annotate_TE.pl listed it as Copia )
+PF05585	LTR/Pao	accessory	kept	legacy LTR/Gypsy; RepeatPeps LTR/Pao 12
+PF01609	DNA	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 45, DNA/PIF-Spy 13, DNA/PIF-ISL2EU 6, DNA/PiggyBac 4, ARTEFACT 3
+PF02892	DNA	-	kept	legacy notLTR; RepeatPeps DNA/hAT-Ac 89, DNA/hAT-hATx 12, DNA/hAT-Tag1 4, DNA/hAT-Pegasus 3, DNA/hAT-hobo 2
+PF04937	DNA	-	kept	legacy notLTR; RepeatPeps DNA/hAT-Tag1 57, DNA/hAT-Ac 20, DNA/hAT-hAT19 6, DNA/hAT-hATx 1, DNA/hAT-Tip100 1
+PF05699	DNA	-	kept	legacy notLTR; RepeatPeps DNA/hAT-Ac 187, DNA/hAT-Tip100 136, DNA/hAT-Tag1 49, DNA/hAT-Charlie 27, DNA/hAT-hobo 22
+PF06869	DNA	-	kept	legacy notLTR; RepeatPeps DNA/CMC-EnSpm 7, DNA/CMC-Mirage 1
+PF13359	DNA	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 186, DNA/PIF-ISL2EU 23, DNA/PIF-Spy 17, DNA/PIF-HarbS 15
+PF13384	DNA	-	kept	legacy notLTR; RepeatPeps DNA/TcMar-Tc1 54, DNA/TcMar-Fot1 9, DNA/TcMar 5, DNA/TcMar-IS885 4, DNA/TcMar-ISRm11 4
+PF13412	DNA	-	kept	legacy notLTR; RepeatPeps DNA/TcMar-Mariner 8, DNA/TcMar-Tc1 3
+PF14291	DNA	-	kept	legacy notLTR; RepeatPeps DNA/hAT-Tip100 185, DNA/hAT-Charlie 105, DNA/hAT-Blackjack 5, DNA/hAT-hATx 1, DNA/hAT-Ac 1
+PF02992	DNA/CMC-EnSpm	-	kept	legacy notLTR; RepeatPeps DNA/CMC-EnSpm 127
+PF03004	DNA/CMC-EnSpm	-	kept	legacy notLTR; RepeatPeps DNA/CMC-EnSpm 13
+PF13952	DNA/CMC-EnSpm	-	kept	legacy notLTR; RepeatPeps DNA/CMC-EnSpm 60
+PF13960	DNA/CMC-EnSpm	-	kept	legacy notLTR; RepeatPeps DNA/CMC-EnSpm 102
+PF13963	DNA/CMC-EnSpm	-	kept	legacy notLTR; RepeatPeps DNA/CMC-EnSpm 95
+PF00872	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 187
+PF03101	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 45
+PF03108	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 96
+PF04434	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 117, DNA/MULE-NOF 1
+PF06839	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 5
+PF09322	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 5
+PF10551	DNA/MULE-MuDR	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 347, LTR/Gypsy 1, DNA/MULE 1, DNA/MULE-NOF 1
+PF04827	DNA/PIF-Harbinger	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 122
+PF12776	DNA/PIF-Harbinger	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 20
+PF13837	DNA/PIF-Harbinger	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 21
+PF13873	DNA/PIF-Harbinger	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 6
+PF14303	DNA/PIF-Harbinger	-	kept	legacy notLTR; RepeatPeps DNA/PIF-Harbinger 18
+PF01498	DNA/TcMar-Tc1	-	kept	legacy notLTR; RepeatPeps DNA/TcMar-Tc1 259, DNA/TcMar-Mariner 14, DNA/TcMar-Stowaway 2
+PF14372	DNA/hAT-Ac	-	kept	legacy notLTR; RepeatPeps DNA/hAT-Ac 106
+PF03372	LINE	-	kept	legacy notLTR; RepeatPeps LINE/L1 602, LINE/L2 274, LINE/CR1 238, LINE/L1-Tx1 202, LINE/I-Jockey 193
+PF13966	LINE	-	kept	legacy notLTR; RepeatPeps LINE/L1 355, LINE/L1-Tx1 117, LINE/R1 2, LINE/Dong-R4 1
+PF14529	LINE	-	kept	legacy notLTR; RepeatPeps LINE/CR1 211, LINE/I-Jockey 205, LINE/I 199, LINE/L2 181, LINE/R1 173
+PF14111	LINE/L1	-	kept	legacy notLTR; RepeatPeps LINE/L1 82, DNA/CMC-EnSpm 1
+PF00249	Other	-	kept	legacy notLTR; RepeatPeps LINE/R2 1
+PF00376	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF00437	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF00564	Other	-	kept	legacy notLTR; RepeatPeps DNA/TcMar-ISRm11 1, DNA/CMC-EnSpm 1
+PF00646	Other	-	kept	legacy notLTR; RepeatPeps LINE/L1 1
+PF02902	Other	-	kept	legacy notLTR; RepeatPeps DNA/MULE-MuDR 19, DNA/Zisupton 14, LINE/R2-NeSL 6, DNA/Crypton-F 4, DNA/MULE-NOF 4
+PF04147	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF04967	Other	-	kept	legacy notLTR; RepeatPeps DNA/TcMar-Mariner 1
+PF05285	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF06072	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF10446	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF12116	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF12728	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF12796	Other	-	kept	legacy notLTR; RepeatPeps LTR/Gypsy 1
+PF13191	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF13401	Other	-	kept	legacy notLTR; RepeatPeps RC/Helitron 2, DNA/Zisupton 2
+PF13542	Other	-	kept	legacy notLTR; RepeatPeps DNA/TcMar-Tc1 2
+PF13857	Other	-	kept	legacy notLTR; RepeatPeps no hits
+PF05970	RC/Helitron	-	kept	legacy notLTR; RepeatPeps RC/Helitron 99, DNA/Zisupton 3
+PF13245	RC/Helitron	-	kept	legacy notLTR; RepeatPeps RC/Helitron 33, DNA/Zisupton 3, LINE/R1 1
+PF13538	RC/Helitron	-	kept	legacy notLTR; RepeatPeps RC/Helitron 3
+PF13604	RC/Helitron	-	kept	legacy notLTR; RepeatPeps RC/Helitron 58, DNA/Zisupton 3
+PF14214	RC/Helitron	-	kept	legacy notLTR; RepeatPeps RC/Helitron 95, RC/Helitron-2 1

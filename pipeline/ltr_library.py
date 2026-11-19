@@ -431,7 +431,7 @@ class Run:
     def cluster(self):
         self.search('clean_nested.fa', 'clean_nested.fa', 5, 'nested_ava.tsv', AVA, 'cluster.log', clustering=True)
         if self.a.stage_b:
-            self.py('step4.py', 'nested_ava.tsv', 'nested_ava.tsv', 'elem/clusters_red.json', log='cluster.log', stdout='elem/nested.txt')
+            self.py('step4.py', 'nested_ava.tsv', 'nested_ava.tsv', 'elem/clusters_red.json', '--reps', 'elem/reps.json', log='cluster.log', stdout='elem/nested.txt')
             self.sh([sys.executable, os.path.join(HERE, 'stage_b.py'), 'expand', 'elem/clusters_raw.json', 'elem/reps.json',
                      'elem/clusters_red.json', 'clean_nested.fa', 'elem/clusters_nested.json', 'exemplar.fa'],
                     'cluster.log', stdout='exemplar.txt')
