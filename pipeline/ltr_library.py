@@ -104,7 +104,7 @@ STEP_OPTIONS = {
     'models': ['min_cons'],
     'mdepth': ['no_model_depth', 'model_depth_ratio', 'int_copies_max', 'depth_jump_fold', 'depth_word', 'polya_family'],
     'families': ['word'],
-    'seeds': ['seed_copies'],
+    'seeds': ['seed_copies', 'mask_warn'],
     'evidence': ['evidence_reference'],
 }
 
@@ -667,6 +667,12 @@ class Run:
         if failed:
             self.log(f'  te-composer failed on {len(failed)} record(s), left as one-row alignments ({", ".join(failed[:5])}'
                      f'{" ..." if len(failed) > 5 else ""}); see logs/seeds.log')
+        # report only: each record's estimated share of the genome masked, from the same hits (families.tsv
+        # est_genome_pct); a record at or above --mask-warn percent is named in the log, nothing is changed
+        p = self.params()
+        self.py('mask_share.py', os.path.join('seeds', 'hits.tsv'), 'families.tsv', p['scale'], p['genome_mb'],
+                '--warn', a.mask_warn, log='seeds.log', stdout='mask_share.txt')
+        self.log('  ' + open(self.path('mask_share.txt')).read().strip())
 
     def evidence(self):
         a = self.a
@@ -784,6 +790,11 @@ def main():
                    help="do not keep again the elements that lost the overlap choice only to elements the poly-A family veto removes")
     m.add_argument('--early-tier', action='store_true', help="drop raw singletons the tier would reject before step 14")
     m.add_argument('--seed-copies', type=int, default=50, help='genome copies per seed alignment in library.stk (50)')
+    m.add_argument('--mask-warn', type=float, default=2.0, metavar='PCT',
+                   help='report only: name in the log any record estimated (step 23b\'s sample search) to mask at least '
+                        'PCT percent of the non-N genome; families.tsv gets every record\'s estimate (est_genome_pct). '
+                        'A warning means look at the record: L1 or SINE sequence called LTR is the known failure, and '
+                        'very abundant real LTR families also reach it (maize). 0: no warning (2.0)')
     m.add_argument('--int-copies-max', type=float,
                    help='step 22b drops an internal model with more genome copies than this per element of its cluster '
                         '(2000 with --early-tier, otherwise off; 0: off)')

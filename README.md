@@ -507,8 +507,12 @@ the genome has. Until 2026-11-18 it was six frames per candidate of the
 run (`--domain-z 0` gives that rule): gorilla's 157,206 candidates made
 every E-value 7.9 times what it is now, Arabidopsis' 5,573 made it 0.28
 times. The constant sits in the range the candidate counts of the tuning
-genomes had when the thresholds were set (13,000 to 29,000). The library
-scores with the constant have not been run yet.
+genomes had when the thresholds were set (13,000 to 29,000). With the
+constant and `--prog-f 0` (2026-11-18/19, sensitivity / precision, before
+then after): Arabidopsis 91.09 / 95.50 to 91.05 / 95.46, zebra finch
+76.13 / 86.28 to 76.08 / 86.28, rice 93.57 / 98.42 to 93.56 / 98.42, lotus
+92.64 / 94.32 to 92.63 / 94.20.  Lotus ran with rmblastn 3.1.0, the other
+three with 3.0.12.
 
 **Known limitation.** On a large target set nail does not report some
 strong hits that it reports when the same sequences are searched in a
@@ -1352,6 +1356,21 @@ figure.
     genome range.  On rice: 865 alignments, median 23 rows, 51 s.  A
     te-composer without `--fixed-cons` (before 0.6.8) gives one-row
     alignments.
+
+    **Large-record warning (report only).**  The same search is read as a
+    masking run (each sample base goes to the best-scoring record over it),
+    and each record's estimated share of the non-N genome goes into
+    `families.tsv` (`est_genome_pct`).  A record at or above `--mask-warn`
+    (2%) is named in the log line.  Nothing is dropped or changed.  The
+    failure it is for is one record of L1 or SINE sequence called LTR that
+    masks a large part of the genome: in three mouse runs with a rule
+    switched off, one record each was estimated at 3.5% to 5.5% of the
+    genome and made 60% to 90% of the run's false-positive bases.  On the
+    six tuning libraries the largest record is 1.2% (lotus).  The 2% was set
+    once from these nine libraries and is not tuned.  **A warning means
+    "look at this record", not "this record is wrong"**: in a genome made
+    largely of a few LTR families, real records pass 2% (maize: 3 of 2,268
+    records, all one Gypsy family, up to 6.2%).
 24. **Evidence page** (`--evidence-page`).
 
 `--stage-a` skips steps 12–13 and depth-cleans and re-clusters every
