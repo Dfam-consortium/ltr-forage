@@ -83,7 +83,7 @@ an artifact mechanism, not lower novelty.
 External programs: ltr-forage, sufr, rmblastn (Rust), te-composer (dfam-curator >= 0.6.6), and nail
 (>= 0.7.1) with MMseqs2 for ltr-forage's domain search, found from the options, the environment (LTRFORAGE,
 SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy."""
-import argparse, concurrent.futures, glob, os, random, re, shutil, subprocess, sys, time
+import argparse, concurrent.futures, glob, os, random, re, shutil, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # through symlinks (an LTR_FORAGE_DIR of links)
 ROOT = os.path.dirname(HERE)
@@ -197,6 +197,12 @@ class Run:
         os.makedirs(os.path.join(self.out, 'logs'), exist_ok=True)
         os.makedirs(os.path.join(self.out, 'elem'), exist_ok=True)
         os.makedirs(os.path.join(self.out, '.done'), exist_ok=True)
+        # temporary files of every step go under the outdir, not the system /tmp, unless --tmpdir names another
+        # place: sufr's index partitions need up to the index's size (C. elegans peak 0.58 GB, index 0.90 GB), sufr
+        # does not check its writes, and a full /tmp gives a corrupt index without an error
+        self.tmp = os.path.abspath(a.tmpdir) if a.tmpdir else os.path.join(self.out, 'tmp')
+        os.makedirs(self.tmp, exist_ok=True)
+        os.environ['TMPDIR'] = self.tmp; tempfile.tempdir = self.tmp
         self.env = dict(os.environ, TSV=os.path.join(self.out, 'cand.tsv'), RMBLASTN=a.rmblastn, WORD=str(a.word))
         redo = STEPS[STEPS.index(a.from_step):] if a.from_step else []
         # stage A and B outputs from step 12 on don't mix: a rerun keeps the mode its finished steps were made in.
@@ -695,7 +701,7 @@ class Run:
         with open(self.path('versions.txt'), 'a') as fh:
             fh.write(f'# {time.strftime("%Y-%m-%d %H:%M:%S")}\n')
             fh.write('command\t' + ' '.join([os.path.abspath(sys.argv[0])] + sys.argv[1:]) + '\n')
-            fh.write(f'genome\t{self.genome}\nsufr_index\t{self.sufr}\ndomain_hmm\t{os.path.abspath(a.domain_hmm)}\n')
+            fh.write(f'genome\t{self.genome}\nsufr_index\t{self.sufr}\ntmpdir\t{self.tmp}\ndomain_hmm\t{os.path.abspath(a.domain_hmm)}\n')
             for k, p, flag in (('ltr-forage', a.ltr_forage, '--version'), ('rmblastn', a.rmblastn, '-version'), ('nail', a.nail, '--version'),
                                ('mmseqs', a.mmseqs, 'version'), ('te-composer', a.te_composer, '--version'), ('sufr', a.sufr, '--version')):
                 if p: fh.write(f'{k}\t{p}\t{tool_version(p, flag)}\n')
@@ -728,6 +734,8 @@ class Run:
         nfam = len({l.split('\t')[0] for l in open(self.path('families.tsv'))} - {'family'})
         if a.evidence_page:
             self.step('evidence', '24 evidence page', self.evidence)
+        try: os.rmdir(self.path('tmp'))   # the default tmpdir, when the steps left it empty
+        except OSError: pass
         m = (time.time() - t0) / 60
         self.log(f'done: {nrec} records, {nfam} families ({m:.1f} min)')
 
@@ -738,6 +746,8 @@ def main():
     ap.add_argument('genome')
     ap.add_argument('-o', '--outdir', required=True)
     ap.add_argument('-t', '--threads', type=int, default=os.cpu_count())
+    ap.add_argument('--tmpdir', help='directory for temporary files of all steps (default: <outdir>/tmp; '
+                    'the sufr index step needs up to the size of the finished index there, ~9 bytes per genome base)')
     ap.add_argument('--sufr', dest='sufr_index', help='existing sufr index of the genome (skips step 1; default: '
                     '<genome>.sufr beside the genome when it exists, with .fa/.fasta/.fna dropped)')
     ap.add_argument('--tier', choices=('pbs', 'strict', 'all'), default='pbs', help='singleton clusters kept: identity >= 93 or a PBS '

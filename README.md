@@ -69,7 +69,9 @@ sufr create --dna genome.fa -o genome.sufr
 ```
 
 Do not pass `--ignore-softmask` on a soft-masked assembly (see
-[Create a sufr index](#create-a-sufr-index)).
+[Create a sufr index](#create-a-sufr-index)).  sufr writes its partition files to `$TMPDIR` (`/tmp` when
+unset) and needs up to the size of the finished index there, about 9 bytes
+per genome base (see [Create a sufr index](#create-a-sufr-index)).
 
 ### 2. Detect LTR retrotransposon copies
 
@@ -934,6 +936,14 @@ sufr create --dna genome.fa -o genome.sufr
 and everything `ltr-forage` reads from it are case-free. Query strings given
 to `sufr count` are not normalised, so pass them in upper case.
 
+sufr writes its partition files to `$TMPDIR`, or `/tmp` when it is unset,
+and needs up to the size of the finished index there (about 9 bytes per
+genome base: 0.58 GB peak for the 100-Mb *C. elegans* genome, whose index is
+0.90 GB).  Point `TMPDIR` at a disk with room.  sufr 0.7.12 does not check
+these writes: when the disk fills, it builds an index of the expected size
+with corrupt LCP values and reports no error, and ltr-forage then stalls in
+step 3 (a 3.4-Gb genome on a machine whose `/tmp` had 20 GB free).
+
 ---
 
 ## Usage
@@ -1164,7 +1174,9 @@ profiles default to the shipped `data/TEdomains.hmm` (`--domain-hmm`). A sufr
 index beside the genome (`genome.sufr` for `genome.fa`) is used when it
 exists and is not older than the genome; `--sufr` names another. Each run
 appends the command and every program's path and version to
-`out/versions.txt`, and its step times to `out/steps.log`.  The genome must
+`out/versions.txt`, and its step times to `out/steps.log`.  Every step's temporary files go to
+`out/tmp` (`--tmpdir` names another place), not the system `/tmp`; the
+index step needs up to the size of the finished index there.  The genome must
 be an uncompressed FASTA file whose sequence names are unique and hold no
 `#` (library records use it to separate name and class). The step scripts live beside the driver in `pipeline/`.
 
@@ -1766,6 +1778,50 @@ check included; their times are from a busier machine than the first runs
   rule assumes otherwise.  It now applies only with `--early-tier`, the
   one setting where it changed a tuning genome, so a default run keeps
   these four models; the maize row predates that.
+
+**Release validation (2026-11-19/20).**  The frozen release (commit
+d80fbdb, rmblastn 3.1.0, nail 0.7.1), run with all defaults and 8 threads
+on a 56-core machine of our own, scored against the same standards.  For
+part of the time two RepeatMasker jobs (the horse and opossum standards)
+shared that machine:
+
+| Genome | Sensitivity | Precision | Earlier row | Time |
+|--------|-------------|-----------|-------------|------|
+| *D. melanogaster* | 92.67% | 91.05% | 92.66% / 96.39% | 34 min |
+| *C. elegans* | 31.14% | 66.17% | 23.74% / 53.85% | 5 min |
+| Soybean | 98.73% | 79.72% | 99.20% / 79.49% | 520 min |
+
+- **Fly lost 5.3 points of precision, and it is a known limitation of this
+  release.**  The release set itself a limit of 3 points on held-out
+  precision, and fly fails it.  Sensitivity did not move, but
+  false-positive masking went from 0.59 to 1.55 Mb and kept elements from
+  947 to 1,111.  The cause is the profile set, `data/TEdomains.hmm`, which
+  replaced LTR_retriever's `TEfam.hmm` on 2026-11-17.  Rerunning the release
+  on fly with one change reverted at a time gives:
+
+  | Fly, frozen release with | Sensitivity | Precision | Kept elements |
+  |--------------------------|-------------|-----------|---------------|
+  | nothing changed | 92.67% | 91.05% | 1,111 |
+  | `--domain-hmm data/TEfam.hmm` | 93.08% | 95.03% | 968 |
+  | `--domain-z 0` (E-values from the run's own count) | 92.63% | 88.92% | 1,113 |
+  | nail `--prog-f 0.01` (nail's default) | 92.87% | 90.99% | 1,110 |
+  | all three reverted | 93.22% | 94.09% | 996 |
+
+  The new profiles' Pfam domains are not in `TEfam.hmm`: the two reverse
+  transcriptase RNase H domains (PF17917, PF17919), the Gypsy protein
+  (PF07253) and the integrase zinc-binding domain (PF17921).  Those
+  profiles now give strong domain calls (most under E = 1e-10) to
+  candidates whose two "LTRs" are young copies of a LINE (R1, CR1, Jockey)
+  or a DNA transposon (ProtoP).  The copies sit inside or beside a real
+  Gypsy element, so the candidate's "internal" region carries that
+  element's coding sequence.  The domain calls are right; the elements are
+  nesting artifacts.  Fly is full of young, active, densely nested
+  elements, so it shows this most.  The tuning genomes chose these profiles,
+  and held-out results are not used for tuning, so the profile set stays.
+  The remaining 1.4 points against the earlier row come from the other
+  changes since 2026-11-05 and were not traced.  The fix that would address
+  this, a test of whether the coding sequence belongs to another element
+  nested between the two copies, is future work.
 
 ---
 
