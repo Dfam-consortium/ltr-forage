@@ -202,7 +202,7 @@ impl ProfileTable {
             keys.push((key, stem.to_string()));
         }
         if !unclassified.is_empty() {
-            eprintln!("[8b protein domains] warning: {} profile(s) without a class count as disagreement: {}",
+            log_warn!("[8b protein domains] {} profile(s) without a class count as disagreement: {}",
                       unclassified.len(), unclassified.join(", "));
         }
         Ok((table, keys))
@@ -326,7 +326,7 @@ pub fn search(nail: &Nail, hmm: &Path, seqs: &[Option<&[u8]>], num_targets: usiz
     // TEfam.hmm starts with one), so it gets a copy without them
     let hmm_text = std::fs::read_to_string(hmm).with_context(|| format!("reading {}", hmm.display()))?;
     let (tbl_classes, profiles) = ProfileTable::from_hmm(&hmm_text).with_context(|| format!("reading {}", hmm.display()))?;
-    eprintln!("[8b protein domains] {} profiles, classes {}", profiles.len(),
+    log_detail!("[8b protein domains] {} profiles, classes {}", profiles.len(),
               if tbl_classes.annotated { "from the profile file" } else { "from LTR_retriever's lists ( unannotated profile file )" });
     if TABLE.set(tbl_classes).is_err() {
         bail!("domain::search ran twice in one process; the profile classes are set once");

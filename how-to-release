@@ -1,0 +1,89 @@
+# How to Release ltr-forage
+
+## Overview
+
+Releases are built by a GitHub Actions workflow (.github/workflows/release.yml) that builds the binary
+natively on each platform, packages it with `make dist`, smoke-tests the package, and attaches the archives to
+a GitHub Release.  It is the arrangement rmblast uses (../rmblast-port/rmblast/how-to-release).
+
+Supported platforms:
+  - Linux   x86_64        (x86_64-unknown-linux-gnu)
+  - macOS   Apple Silicon (aarch64-apple-darwin)
+
+The archive has the layout `make install` produces locally:
+
+    ltr-forage-<version>/bin/ltr-forage
+    ltr-forage-<version>/bin/ltr_library.py        -> ../pipeline/ltr_library.py
+    ltr-forage-<version>/pipeline/                 the driver, its step scripts, the evidence-page template
+    ltr-forage-<version>/data/                     TEdomains.hmm, TEfam.hmm, domains/, matrices/
+    ltr-forage-<version>/examples/                 ath_chr4.fa.gz and its README
+    ltr-forage-<version>/docs/pipeline_figure.svg
+    ltr-forage-<version>/README.md, CHANGELOG.md, LICENSE
+
+ltr-forage finds data/TEdomains.hmm relative to itself, and the driver finds pipeline/ and data/ relative to
+itself, so the tree is relocatable.  The other programs (sufr, rmblastn, te-composer, nail, MMseqs2) are not
+bundled; the README's Installation section lists them.
+
+Change what ships by editing the Makefile's lists (DOCS, PIPELINE, DATA, ...); the workflow follows.
+
+
+## Releasing a new version
+
+1. Bump the version in Cargo.toml ([package] version = "X.Y.Z").  The Makefile reads it (`make version`) and
+   stamps it into the package directory and archive names; build.rs puts it, with the commit, into
+   `ltr-forage --version`.
+
+2. Give CHANGELOG.md a section headed "## X.Y.Z - YYYY-MM-DD" (rename "Unreleased").  It becomes the
+   description of the GitHub Release.  To preview it:
+
+     .github/scripts/release_notes.sh X.Y.Z
+
+3. Commit and push to main (with the updated Cargo.lock).
+
+4. Check the release build:
+
+     make check-release TAG=X.Y.Z
+
+   It fails unless the tracked tree is clean, Cargo.toml says X.Y.Z, the CHANGELOG has the section, and the
+   freshly built binary reports exactly "ltr-forage X.Y.Z (<HEAD commit>)".  Every build carries its commit (and
+   "-dirty" for uncommitted changes in Cargo.toml, Cargo.lock, build.rs or src/) in --version; a build from a
+   source tarball without git prints the version alone.
+
+5. Push a version tag:
+
+     git tag X.Y.Z
+     git push origin X.Y.Z
+
+   `X.Y.Z` and `vX.Y.Z` are both accepted.  The workflow fails fast if the tag disagrees with Cargo.toml.
+
+GitHub Actions builds both platforms, smoke-tests each package (the version string; a tRNA scan of the example
+chromosome, which must find 100 genes; the driver's --help), and publishes the Release with the CHANGELOG
+section as its description and the archives attached.
+
+If a release run fails, fix the problem, delete the tag, and push it again:
+
+     git tag -d X.Y.Z
+     git push --delete origin X.Y.Z
+     git tag X.Y.Z
+     git push origin X.Y.Z
+
+
+## Testing the workflow without publishing
+
+Run it from the Actions tab ("Release" -> "Run workflow").  A manual run builds and smoke-tests the archives
+and attaches them to the run as artifacts; the release job is skipped (it needs a tag).
+
+Locally, the equivalent of what CI does is:
+
+     make dist PREFIX=/staging DESTDIR="$PWD/stage"
+
+`make dist` installs into a staging DESTDIR (./stage when none is given) and tars that; it never writes to
+PREFIX itself (/usr/local by default).
+
+
+## Dependencies pinned for the build
+
+libsufr is a git dependency pinned to a commit of TravisWheelerLab/sufr (Cargo.toml), and rmblast-lib to a
+tag of Dfam-consortium/RMBlast.  sufr 0.8.0 changes its library API and index format (version 7); moving to it
+needs ltr-forage's index reading ported (src/main.rs, src/internal.rs, src/stream.rs, src/bin/kmer_depth.rs),
+`--write-lcp` added to the driver's `sufr create`, and every index rebuilt.

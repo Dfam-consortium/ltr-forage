@@ -81,7 +81,17 @@ class Genome:
 CODON = {}
 _b = 'TCAG'; _aa = 'FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG'
 for i, (x, y, z) in enumerate((x, y, z) for x in _b for y in _b for z in _b): CODON[x + y + z] = _aa[i]
-def rc(s): return s[::-1].translate(str.maketrans('ACGTN', 'TGCAN'))
+def rc(s): return s[::-1].translate(str.maketrans('ACGTRYKMSWBDHVNacgtrykmswbdhvn', 'TGCAYRMKSWVHDBNtgcayrmkswvhdbn'))
+
+
+def ppt(before):
+    """ltr-forage's polypurine tract call (features::ppt) on the 40 bp before the 3' LTR: the most purine-rich
+    15-bp window of the last 30, its start relative to the 3' LTR."""
+    best = (0, 0); lo = max(0, len(before) - 30)
+    for w in range(lo, len(before) - 15 + 1):
+        n = sum(1 for ch in before[w:w + 15].upper() if ch in 'AG')
+        if n > best[0]: best = (n, w - len(before))
+    return {'ppt_purines15': best[0], 'ppt_offset': best[1]}
 def orfs(seq):
     """Six-frame stop-to-stop ORFs of >= 60 aa: (id, aa, strand, frame, aa offset)."""
     for strand, s in (('+', seq), ('-', rc(seq))):
@@ -374,6 +384,23 @@ def main():
         es, ee = int(x['elem_start']), int(x['elem_end'])
         ls_, le = int(x['lltr_start']), int(x['lltr_end']); rs, re_ = int(x['rltr_start']), int(x['rltr_end'])
         elem = G.get(c, es, ee); lltr = G.get(c, ls_, le); rltr = G.get(c, rs, re_); intr = G.get(c, le + 1, rs - 1)
+        t = int(x['tsd_len'])
+        ends = {'tsd_seq': x['tsd_seq'], 'motif': x['motif'], 'flank5': G.get(c, es - FLANK, es - 1), 'flank3': G.get(c, ee + 1, ee + FLANK),
+                'after5ltr': G.get(c, le + 1, le + 40), 'before3ltr': G.get(c, rs - 40, rs - 1),
+                'ppt_offset': int(x['ppt_offset']), 'ppt_purines15': int(x['ppt_purines15'])}
+        pbs_strand = x['pbs_strand']
+        # a family whose models were turned to the coding strand (orient_models.py) is drawn that way too: the
+        # element reverse-complemented, its 3' LTR first; LTR positions are given in the turned element
+        flipped = pick.get('flipped') == 'yes'
+        if flipped:
+            l5, l3 = re_ - rs + 1, le - ls_ + 1
+            elem, lltr, rltr, intr = rc(elem), rc(rltr), rc(lltr), rc(intr)
+            ls_, le, rs, re_ = es, es + l5 - 1, ee - l3 + 1, ee
+            before3 = rc(ends['after5ltr'])
+            ends = {'tsd_seq': rc(G.get(c, ee + 1, ee + t)) if t else x['tsd_seq'], 'motif': rc(x['motif'][2:]) + rc(x['motif'][:2]),
+                    'flank5': rc(ends['flank3']), 'flank3': rc(ends['flank5']),
+                    'after5ltr': rc(ends['before3ltr']), 'before3ltr': before3, **ppt(before3)}
+            pbs_strand = {'+': '-', '-': '+'}.get(pbs_strand, pbs_strand)
         d = os.path.join(work, fam); os.makedirs(d, exist_ok=True)
         for k, s_ in (('lltr', lltr), ('rltr', rltr)): open(f'{d}/{k}.fa', 'w').write(f'>{k}\n{s_}\n')
         # 5' vs 3' LTR: the best HSP, as rmblastn's pairwise text
@@ -385,20 +412,21 @@ def main():
         mseqs = collections.Counter(re.match(r'(\S+):', y)[1] for y in mem)
         pbs = None
         if x.get('pbs_trna', '.') not in ('.', ''):
-            pbs = {'trna': x['pbs_trna'], 'mm12': int(x['pbs_mm12']), 'edist18': x['pbs_edist18'], 'strand': x['pbs_strand'],
+            pbs = {'trna': x['pbs_trna'], 'mm12': int(x['pbs_mm12']), 'edist18': x['pbs_edist18'], 'strand': pbs_strand,
                    'offset': int(x['pbs_offset'])}
         return {
-            'family': fam, 'id': e, 'seq': c, 'start': es, 'end': ee, 'len': ee - es + 1,
+            'family': fam, 'id': e, 'seq': c, 'start': es, 'end': ee, 'len': ee - es + 1, 'flipped': flipped,
+            'orientation': pick.get('orientation', ''),
             'models': [{'name': r['new_name'], 'kind': r['kind'], 'len': int(r['len']), 'class': r['class']} for r in rows],
             'class': next((r['class'] for r in rows if r['class']), 'LTR'),
             'lltr': [ls_, le], 'rltr': [rs, re_], 'ltr_identity': float(x['identity']),
-            'tsd_len': int(x['tsd_len']), 'tsd_seq': x['tsd_seq'], 'tsd_mm': x.get('tsd_mm', '0') not in ('0', '', '.'),
-            'motif': x['motif'], 'motif_class': x['motif_class'],
-            'ppt_offset': int(x['ppt_offset']), 'ppt_purines15': int(x['ppt_purines15']),
+            'tsd_len': t, 'tsd_seq': ends['tsd_seq'], 'tsd_mm': x.get('tsd_mm', '0') not in ('0', '', '.'),
+            'motif': ends['motif'], 'motif_class': x['motif_class'],
+            'ppt_offset': ends['ppt_offset'], 'ppt_purines15': ends['ppt_purines15'],
             'dom_nest': x.get('dom_nest', '.') not in ('.', '', '0'), 'evidence': x['evidence'],
             'n_runs': n_runs(elem), 'pbs': pbs,
-            'flank5': G.get(c, es - FLANK, es - 1), 'ltr5_head': lltr[:30], 'ltr3_tail': rltr[-30:], 'flank3': G.get(c, ee + 1, ee + FLANK),
-            'after5ltr': G.get(c, le + 1, le + 40), 'before3ltr': G.get(c, rs - 40, rs - 1), 'after3ltr_rc': rc(G.get(c, rs - 40, rs - 1)),
+            'flank5': ends['flank5'], 'ltr5_head': lltr[:30], 'ltr3_tail': rltr[-30:], 'flank3': ends['flank3'],
+            'after5ltr': ends['after5ltr'], 'before3ltr': ends['before3ltr'], 'after3ltr_rc': rc(ends['before3ltr']),
             'ltr_pair_aln': m.group(1).strip() if m else '',
             'cluster': {'elements': len(mem), 'seqs': len(mseqs), 'top_seq_share': round(max(mseqs.values()) / len(mem), 2),
                         'sd': cl in sd},

@@ -201,7 +201,7 @@ function diagram(c) {
   const x = p => L0 + (p - 1) / len * span;
   const ltrL = c.lltr[1] - c.lltr[0] + 1, rS = c.rltr[0] - c.start + 1, intOff = ltrL;
   let s = "";
-  const rows = { dom: 26, elem: 84, nt: 128, aa: 156 };
+  const rows = { dom: 26, elem: 84, nt: 150, aa: 178 };   // the ruler under the element takes elem + 20 to elem + 38
   s += `<text class="lab" x="0" y="${rows.dom + 4}">protein domains</text>`;
   s += `<text class="lab" x="0" y="${rows.elem + 4}">founding element</text>`;
   if (hasRef) { s += `<text class="lab" x="0" y="${rows.nt + 4}">reference, nt</text>`; s += `<text class="lab" x="0" y="${rows.aa + 4}">reference, protein</text>`; }
@@ -222,7 +222,7 @@ function diagram(c) {
     const tip = d.strand === "+" ? `M${a},${y} L${Math.max(a, b - 5)},${y} L${b},${y + h / 2} L${Math.max(a, b - 5)},${y + h} L${a},${y + h} Z` : `M${Math.min(b, a + 5)},${y} L${b},${y} L${b},${y + h} L${Math.min(b, a + 5)},${y + h} L${a},${y + h / 2} Z`;
     s += `<path d="${tip}" fill="var(--${cl})"><title>${esc(d.name)} (${esc(d.desc)}), ${d.strand} strand, E=${d.ievalue.toExponential(0)}</title></path>`;
   });
-  let H = 112;
+  let H = rows.elem + 42;   // room for the ruler's labels
   if (hasRef) {
     const simCol = pid => { const t = Math.max(0, Math.min(1, (pid - 40) / 60)); return `color-mix(in srgb, var(--sim-hi) ${Math.round(t * 100)}%, var(--sim-lo))`; };
     const bars = (hit, off, row) => (hit ? hit.hsps : []).map(h => `<rect x="${x(off + h.qs)}" y="${row - 6}" width="${Math.max(1.5, x(off + h.qe) - x(off + h.qs))}" height="12" fill="${simCol(h.pid)}"><title>${esc(fam(hit.target))}: ${h.pid.toFixed(1)}% over ${h.qe - h.qs + 1} bp</title></rect>`).join("");
@@ -232,7 +232,7 @@ function diagram(c) {
     const nl = best(c.near_ltr), ni = best(c.near_int), na = best(c.near_int_aa);
     s += `<text class="lab" x="${x(1)}" y="${rows.nt + 20}" style="font-size:10px">LTR: ${nl ? esc(fam(nl.target)) : "no hit"}   internal: ${ni ? esc(fam(ni.target)) : "no hit"}</text>`;
     s += `<text class="lab" x="${x(1)}" y="${rows.aa + 20}" style="font-size:10px">internal: ${na ? esc(fam(na.target)) : "no hit"}</text>`;
-    H = 186;
+    H = rows.aa + 28;
   }
   return `<div class="scroll"><svg viewBox="0 0 ${W} ${H}" style="min-width:640px;width:100%;height:auto" role="img" aria-label="Structure of ${esc(c.id)}">
     <defs><pattern id="hatch${c.start}" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--surface)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--gap)" stroke-width="2"/></pattern></defs>${s}</svg></div>`;
@@ -271,7 +271,8 @@ function dossier(c, i) {
       <section>
         <h3>Founding element</h3>
         <dl>
-          <dt>Location</dt><dd>${esc(c.seq)}:${c.start.toLocaleString()}–${c.end.toLocaleString()} (${c.len.toLocaleString()} bp)</dd>
+          <dt>Location</dt><dd>${esc(c.seq)}:${c.start.toLocaleString()}–${c.end.toLocaleString()} (${c.len.toLocaleString()} bp)${c.flipped ? ", minus strand: drawn reverse-complemented, as the library models" : ""}</dd>
+          <dt>Orientation</dt><dd>${c.orientation === "unknown" ? "unknown: no domains or PBS to set it; models in the genome's strand" : c.orientation === "conflict" ? "domains and PBS disagree; models in the genome's strand" : c.orientation ? "coding strand from " + esc(c.orientation) : "–"}</dd>
           <dt>LTRs</dt><dd>${(c.lltr[1] - c.lltr[0] + 1).toLocaleString()} / ${(c.rltr[1] - c.rltr[0] + 1).toLocaleString()} bp, ${c.ltr_identity.toFixed(2)}% identical</dd>
           <dt>TSD</dt><dd>${c.tsd_len ? `${c.tsd_len} bp, ${esc(c.tsd_seq)}${c.tsd_mm ? ` / ${esc(c.flank3.slice(0, c.tsd_len))}, one mismatch` : ""}` : "none found"}</dd>
           <dt>Ends</dt><dd>${esc(c.motif.slice(0, 2))}…${esc(c.motif.slice(2))} ${c.motif_class === "TGCA" ? "(canonical TG…CA)" : c.motif_class === "known" ? "(known variant)" : "(non-canonical)"}</dd>

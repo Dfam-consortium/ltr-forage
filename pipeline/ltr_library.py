@@ -3,8 +3,9 @@
 
 usage: ltr_library.py <genome.fa> -o <outdir> [-t THREADS] [options]
 
-Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continue ltr-forage's log steps
-1-11 and match the boxes of the pipeline figure):
+Steps (they work in <outdir>/work, their commands' logs in <outdir>/work/logs; <outdir>/run.log has every step's
+time and results, the screen a summary (-v: all of it); the numbers continue ltr-forage's log steps 1-11 and match
+the boxes of the pipeline figure):
    0  sample     depth sample: the whole genome up to --sample-above Mb, else a random
                  --sample-frac of its --window-kb windows (seeded); depth floors are scaled to it
    1  index      sufr suffix array of the genome (skipped with --sufr)
@@ -61,7 +62,9 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continu
                  --depth-jump-fold (20) and whose element has neither a TSD nor TG..CA ends took over a
                  cut segment's copies and is dropped (mm10: two LTR models of L1 sequence, 101x and 60x,
                  44 Mb outside the curated LTRs; zebra finch fam0093, 170x with TSD and TG..CA, is real)
-  23  families   80-80 families (LTRs and internals both), gap-aware, Gypsy/Copia class names
+  23  families   80-80 families (LTRs and internals both), gap-aware, Gypsy/Copia class names; then each record
+                 turned to its element's coding strand (orient_models.py: protein domains, else the PBS; families.tsv
+                 orientation and flipped)
  23b  seeds      library.stk, a seed alignment for every record: its best --seed-copies non-overlapping
                  copies in the depth sample (the record's origin element when the sample has none),
                  aligned to the unchanged record by te-composer --fixed-cons, so #=GC RF is the record.
@@ -70,9 +73,10 @@ Steps (logs in <outdir>/logs, timings in <outdir>/steps.log; the numbers continu
                  (structure, domains, PBS, copies, verdict; pipeline/evidence_page.py, which also takes a
                  genome mask, a curated annotation and another tool's mask when run by hand)
 
-Outputs: library.fa (fam<N>_v<k>_LTR|INT#LTR/<class>), library.stk, families.tsv, cand.tsv (every candidate
-element, ltr-forage's table), evidence.html with --evidence-page.  A rerun skips finished steps (<outdir>/.done); --from STEP
-reruns from a step on.
+Outputs in <outdir>: library.fa (fam<N>_v<k>_LTR|INT#LTR/<class>), library.stk, families.tsv, cand.tsv (every
+candidate element, ltr-forage's table), evidence.html with --evidence-page, and run.log (the steps, their results, and
+the programs, versions and paths used).  A successful run removes <outdir>/work unless --keep-work.  A rerun skips
+finished steps (<outdir>/work/.done); --from STEP reruns from a step on (both need work/).
 
 Stage B against stage A (2026-10-20; sensitivity / precision of LTR masking against curated libraries):
 rice 92.70 / 98.53 vs 92.51 / 98.29, zebra finch 74.76 / 83.03 vs 74.67 / 83.45 with steps 14-23 (then numbered 6-14) in 16 min
@@ -90,11 +94,21 @@ ROOT = os.path.dirname(HERE)
 STEPS = ['sample', 'index', 'ltr-forage', 'polya-family', 'precluster', 'premodels', 'depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier',
          'models', 'mdepth', 'families', 'seeds', 'evidence']
 AVA = 'qseqid sseqid pident length qstart qend sstart send qlen slen bitscore'.split()
+# the run's products, moved from <outdir>/work to <outdir> at the end (copied with --keep-work)
+PRODUCTS = ('library.fa', 'library.stk', 'families.tsv', 'cand.tsv', 'evidence.html')
+# the screen's headings: each step's group and, in the library building, its stage range
+PREP, DETECT, BUILD = 'Sequence & Suffix Array Preparation (stages 0-1)', 'LTR Detection: ltr-forage (stages 1-11)', 'Library Building'
+GROUPS = {'sample': (PREP, None), 'index': (PREP, None), 'ltr-forage': (DETECT, None), 'polya-family': (DETECT, None),
+          **{s: (BUILD, 'stages 12-13: clustering and consensus building') for s in ('precluster', 'premodels')},
+          **{s: (BUILD, 'stages 14-22: artifact cleanup') for s in
+             ('depth', 'nested', 'cluster', 'flank', 'contain', 'excise', 'pbs', 'tier', 'models', 'mdepth')},
+          **{s: (BUILD, 'stage    23: families and seed alignments') for s in ('families', 'seeds')},
+          'evidence': (BUILD, 'stage    24: evidence page')}
 # the options each step's output depends on (argparse names); a finished step is not skipped when one changed
 STEP_OPTIONS = {
     'sample': ['sample_above', 'sample_frac', 'window_kb', 'seed', 'sample_file', 'min_depth', 'abs_depth'],
     'index': [],
-    'ltr-forage': ['no_fastan', 'overlaps', 'forage_arg', 'mask_bed'],   # programs and profiles: versions.txt
+    'ltr-forage': ['no_fastan', 'overlaps', 'forage_arg', 'mask_bed'],   # programs and profiles: in run.log
     'polya-family': ['polya_family', 'polya_pool', 'no_polya_rescue', 'seed'],
     'precluster': ['greedy_above', 'greedy_batch', 'greedy_reps', 'word'],
     'premodels': ['early_tier', 'tier', 'min_cons'],
@@ -123,13 +137,13 @@ def version_tuple(line):
     return tuple(map(int, m.groups())) if m else None
 
 
-def find_tool(opt, env, name, fallbacks=(), check=None, min_version=None, flag='--version'):
-    """First executable from the option, the environment variable, PATH, then the fallbacks;
-    with check, only one whose --help output contains that text (NCBI's rmblastn is often on
-    PATH too, and only the Rust port takes the options used here); with min_version, only one at
-    least that version (an older install on PATH would otherwise shadow a newer checkout)."""
+def find_tool(opt, env, name, check=None, min_version=None, flag='--version'):
+    """First executable from the option, the environment variable, then PATH (no built-in install
+    locations); with check, only one whose --help output contains that text (NCBI's rmblastn is often
+    on PATH too, and only the Rust port takes the options used here); with min_version, only one at
+    least that version."""
     seen = []
-    for p in (opt, os.environ.get(env), shutil.which(name), *fallbacks):
+    for p in (opt, os.environ.get(env), shutil.which(name)):
         if not (p and os.path.isfile(p) and os.access(p, os.X_OK)):
             continue
         if check and check not in subprocess.run([p, '--help'], capture_output=True, text=True).stdout:
@@ -193,7 +207,17 @@ def write_sample(genome, out, frac, window, seed):
 class Run:
     def __init__(self, a):
         self.a = a
-        self.out = os.path.abspath(a.outdir)
+        # the products and run.log go to the outdir; every step works in <outdir>/work, which a successful run
+        # removes unless --keep-work (a stopped run keeps it, so a rerun resumes)
+        self.top = os.path.abspath(a.outdir)
+        self.out = os.path.join(self.top, 'work')
+        if os.path.isdir(os.path.join(self.top, '.done')):
+            sys.exit(f'ltr_library: {self.top} was made by an earlier ltr_library.py, with the intermediate files beside '
+                     f'the library; use a new outdir')
+        if not os.path.isdir(self.out) and os.path.exists(os.path.join(self.top, 'library.fa')):
+            sys.exit(f'ltr_library: {self.top} holds a finished run whose intermediate files were removed; use a new outdir'
+                     + (' (--keep-work keeps them, for a later --from)' if a.from_step else ''))
+        self.group = self.sub = None; self.skipped = []
         os.makedirs(os.path.join(self.out, 'logs'), exist_ok=True)
         os.makedirs(os.path.join(self.out, 'elem'), exist_ok=True)
         os.makedirs(os.path.join(self.out, '.done'), exist_ok=True)
@@ -235,10 +259,12 @@ class Run:
     def done_path(self, step): return os.path.join(self.out, '.done', step)
     def path(self, *p): return os.path.join(self.out, *p)
 
-    def log(self, msg):
-        line = f'[{time.strftime("%H:%M:%S")}] {msg}'
-        print(line, flush=True)
-        with open(self.path('steps.log'), 'a') as fh: fh.write(line + '\n')
+    def log(self, msg, level='detail', stamp=None):
+        """One line to <outdir>/run.log, and to the screen for level 'user' and 'warn' (and 'detail' with --verbose).
+        stamp: the line's own time (a program's log line), else now."""
+        line = f'{stamp or time.strftime("[%H:%M:%S]")} {msg}'
+        if level != 'detail' or self.a.verbose: print(line, flush=True)
+        with open(os.path.join(self.top, 'run.log'), 'a') as fh: fh.write(line + '\n')
 
     def sh(self, cmd, log, stdout=None, threads=None):
         """Run one command in outdir; stderr (and stdout unless redirected) to logs/<log>."""
@@ -300,7 +326,14 @@ class Run:
             if diff:
                 sys.exit(f'ltr_library: step {name} in {self.out} was made with other options ({"; ".join(diff)}). '
                          f'Rerun with --from {name} to redo it and the steps after it, or with the options it was made with')
+            if not (name == 'index' and self.a.sufr_index): self.skipped.append(name)
             return
+        if self.skipped and self.group is None:
+            self.log(f'Resuming: {len(self.skipped)} finished step(s) kept ({self.skipped[0]} to {self.skipped[-1]}); '
+                     f'--from STEP redoes from a step', 'user')
+        group, sub = GROUPS[name]
+        if group != self.group: self.log(group, 'user'); self.group, self.sub = group, None
+        if sub and sub != self.sub: self.log('  ' + sub, 'user'); self.sub = sub
         self.log(title)
         fn()
         open(p, 'w').write(sig)
@@ -336,7 +369,7 @@ class Run:
         with open(self.path('sample.txt'), 'w') as fh:
             fh.write(f'genome_mb\t{mb:.1f}\nn_frac\t{ns / total:.4f}\nscale\t{frac:.4f}\nmin_depth\t{mind}\nabs_depth\t{absd}\n'
                      f'kind\t{kind}\n')
-        self.log(f'  genome {mb:.1f} Mb non-N; depth sample {frac:.1%} of the genome; floors {mind} / {absd}')
+        self.log(f'  genome {mb:.1f} Mb non-N; depth sample {frac:.1%} of the genome; floors {mind} / {absd}', 'user')
 
     def params(self):
         return dict(l.rstrip('\n').split('\t') for l in open(self.path('sample.txt')))
@@ -352,13 +385,19 @@ class Run:
 
     def ltr_forage(self):
         self.drop_full_copies()
-        self.sh([self.a.ltr_forage, self.sufr, '--library', 'lib.raw.fa', '--threads', self.a.threads,
+        self.sh([self.a.ltr_forage, self.sufr, '-v', '--library', 'lib.raw.fa', '--threads', self.a.threads,
                  '--domain-hmm', self.a.domain_hmm, '--nail', self.a.nail, '--mmseqs', self.a.mmseqs, '--temp-dir', self.out,
                  '--overlaps', self.a.overlaps, *(['--no-fastan'] if self.a.no_fastan else ['--fastan-out', 'tandem.bed']),
                  *(['--mask-bed', os.path.abspath(self.a.mask_bed)] if self.a.mask_bed else []), *self.a.forage_arg],
                 'ltr-forage.log', stdout='cand.tsv')
         with open(self.path('lib.raw.fa')) as fi, open(self.path('lib.fa'), 'w') as fo:
             for l in fi: fo.write(l.split()[0] + '\n' if l.startswith('>') else l)
+        # ltr-forage's own log (this run's: after the last command line of its log) goes to run.log, indented
+        lines = open(self.path('logs', 'ltr-forage.log')).read().split('\n')
+        last = max((i for i, l in enumerate(lines) if l.startswith('$ ')), default=-1)
+        for l in lines[last + 1:]:
+            m = re.match(r'(\[\d\d:\d\d:\d\d\]) (.*)', l)
+            if m: self.log('  ' + m.group(2), stamp=m.group(1))
 
     def polya_family(self):
         """Step 11b: veto kept elements whose LTRs are copies of the poly-A-terminated repeats ltr-forage vetoed."""
@@ -366,6 +405,11 @@ class Run:
         self.py('polya_family.py', '.', self.genome, '--min-depth', self.a.polya_family, '--min-pool', self.a.polya_pool, '--seed', self.a.seed,
                 *(['--no-rescue'] if self.a.no_polya_rescue else []), log='polya_family.log', stdout='polya_family.txt')
         self.log('  ' + open(self.path('polya_family.txt')).read().strip().split('\n')[-1])
+        # the user's line: candidates (ltr-forage's step 9) and the elements left after the veto (one INT record each)
+        cands = re.findall(r'\[9 decision\] kept \d+ of (\d+) candidate', open(self.path('logs', 'ltr-forage.log')).read())
+        kept = sum(1 for n, _ in read_fasta(self.path('lib.fa')) if n.split('#')[0].endswith('_INT'))
+        self.log(f'  {kept:,} LTR retrotransposon copies kept' + (f' of {int(cands[-1]):,} candidates' if cands else '')
+                 + ' (cand.tsv)', 'user')
 
     def precluster(self):
         if not self.a.stage_b: return
@@ -376,7 +420,7 @@ class Run:
             proj = float(re.search(r'projected all-vs-all hits: ([0-9.]+) M', open(self.path('elem', 'probe.txt')).read()).group(1))
             self.log(f'  probe: {proj:.1f} M all-vs-all hits projected')
         if a.greedy_above >= 0 and proj > a.greedy_above:
-            self.log(f'  greedy clustering (above {a.greedy_above:g} M): batches of {a.greedy_batch}, at most {a.greedy_reps} representatives per cluster')
+            self.log(f'  greedy clustering (above {a.greedy_above:g} M): batches of {a.greedy_batch}, at most {a.greedy_reps} representatives per cluster', 'user')
             self.py('greedy_cluster.py', 'cluster', 'lib.fa', 'elem/clusters_raw.json', '--batch', a.greedy_batch,
                     '--reps', a.greedy_reps, '--work', 'greedy_work', log='precluster.log', stdout='elem/raw.txt')
         else:
@@ -589,6 +633,9 @@ class Run:
         self.search('models.fa', 'models.fa', 5, 'core_ava.tsv', AVA, 'families.log', by_kind=True)
         self.py('family.py', 'models.fa', 'core_ava.tsv', 'library.fa', 'families.tsv', '--rule', 'and', '--cand', 'cand.tsv',
                 '--gap-aware', log='families.log')
+        # each record to its element's coding strand, before the seed alignments are built on it
+        self.py('orient_models.py', 'library.fa', 'families.tsv', 'cand.tsv', log='families.log', stdout='orient.txt')
+        self.log('  ' + open(self.path('orient.txt')).read().strip())
 
     def seeds(self):
         a = self.a
@@ -633,16 +680,25 @@ class Run:
         lone = {r: re.match(r'^(.*):(\d+)\.\.(\d+)(_[A-Z]+)?$', origin.get(r, '')) for r in recs if not pick[r]}
         lone = {r: m for r, m in lone.items() if m}
         if lone:
+            # a record turned to its coding strand (step 23) gets its origin element turned the same way
+            hdr = open(self.path('families.tsv')).readline().rstrip('\n').split('\t')
+            flipped = {f[hdr.index('new_name')] for f in (l.rstrip('\n').split('\t') for l in list(open(self.path('families.tsv')))[1:])
+                       if 'flipped' in hdr and f[hdr.index('flipped')] == 'yes'}
+            comp = str.maketrans('ACGTRYKMSWBDHVNacgtrykmswbdhvn', 'TGCAYRMKSWVHDBNtgcayrmkswvhdbn')
             need = {m.group(1) for m in lone.values()}
             for name, x in read_fasta(self.genome):
                 if name not in need: continue
                 for r, m in lone.items():
                     if m.group(1) == name:
                         lo, hi = int(m.group(2)), int(m.group(3))
-                        seqs[(name, lo, hi)] = (f'{name}:{lo}-{hi}_+', x[lo - 1:hi]); pick[r] = [(name, lo, hi)]
+                        if r.split('#')[0] in flipped:
+                            seqs[(name, lo, hi)] = (f'{name}:{lo}-{hi}_-', x[lo - 1:hi][::-1].translate(comp))
+                        else:
+                            seqs[(name, lo, hi)] = (f'{name}:{lo}-{hi}_+', x[lo - 1:hi])
+                        pick[r] = [(name, lo, hi)]
         fixed = bool(a.te_composer) and '--fixed-cons' in subprocess.run([a.te_composer, '--help'], capture_output=True, text=True).stdout
         if not fixed:
-            self.log('  te-composer has no --fixed-cons (needs >= 0.6.8): one-row seed alignments')
+            self.log('  warning: te-composer has no --fixed-cons (needs >= 0.6.8): one-row seed alignments', 'warn')
         lib = dict(read_fasta(self.path('library.fa')))
         failed = []
         def one(i, r):
@@ -671,14 +727,15 @@ class Run:
         self.log(f'  {len(recs)} seed alignments: {sum(1 for n in rows if n)} from genome copies ({sum(rows)} rows), '
                  f'{len(lone)} from the origin element alone, {sum(1 for n in rows if not n)} one-row')
         if failed:
-            self.log(f'  te-composer failed on {len(failed)} record(s), left as one-row alignments ({", ".join(failed[:5])}'
-                     f'{" ..." if len(failed) > 5 else ""}); see logs/seeds.log')
+            self.log(f'  warning: te-composer failed on {len(failed)} record(s), left as one-row alignments ({", ".join(failed[:5])}'
+                     f'{" ..." if len(failed) > 5 else ""}); see work/logs/seeds.log (--keep-work keeps it)', 'warn')
         # report only: each record's estimated share of the genome masked, from the same hits (families.tsv
         # est_genome_pct); a record at or above --mask-warn percent is named in the log, nothing is changed
         p = self.params()
         self.py('mask_share.py', os.path.join('seeds', 'hits.tsv'), 'families.tsv', p['scale'], p['genome_mb'],
                 '--warn', a.mask_warn, log='seeds.log', stdout='mask_share.txt')
-        self.log('  ' + open(self.path('mask_share.txt')).read().strip())
+        ms = open(self.path('mask_share.txt')).read().strip()
+        self.log('  ' + ms, 'warn' if ms.startswith('WARNING') else 'detail')
 
     def evidence(self):
         a = self.a
@@ -696,15 +753,15 @@ class Run:
         else:
             self.sufr = self.path('genome.sufr')
         t0 = time.time()
-        self.log('ltr_library.py ' + ' '.join(sys.argv[1:]))
-        # what each run in this outdir used, for reproducing it: one block per invocation, the newest last
-        with open(self.path('versions.txt'), 'a') as fh:
-            fh.write(f'# {time.strftime("%Y-%m-%d %H:%M:%S")}\n')
-            fh.write('command\t' + ' '.join([os.path.abspath(sys.argv[0])] + sys.argv[1:]) + '\n')
-            fh.write(f'genome\t{self.genome}\nsufr_index\t{self.sufr}\ntmpdir\t{self.tmp}\ndomain_hmm\t{os.path.abspath(a.domain_hmm)}\n')
-            for k, p, flag in (('ltr-forage', a.ltr_forage, '--version'), ('rmblastn', a.rmblastn, '-version'), ('nail', a.nail, '--version'),
-                               ('mmseqs', a.mmseqs, 'version'), ('te-composer', a.te_composer, '--version'), ('sufr', a.sufr, '--version')):
-                if p: fh.write(f'{k}\t{p}\t{tool_version(p, flag)}\n')
+        with open(os.path.join(self.top, 'run.log'), 'a') as fh: fh.write(f'# {time.strftime("%Y-%m-%d %H:%M:%S")}\n')
+        self.log('ltr_library.py ' + ' '.join(sys.argv[1:]), 'user')
+        # what each run in this outdir used, for reproducing it (run.log has one block per invocation, the newest last)
+        self.log('  command: ' + ' '.join([os.path.abspath(sys.argv[0])] + sys.argv[1:]))
+        for k, v in (('genome', self.genome), ('sufr index', self.sufr), ('tmpdir', self.tmp), ('domain profiles', os.path.abspath(a.domain_hmm))):
+            self.log(f'  {k}: {v}')
+        for k, p, flag in (('ltr-forage', a.ltr_forage, '--version'), ('rmblastn', a.rmblastn, '-version'), ('nail', a.nail, '--version'),
+                           ('mmseqs', a.mmseqs, 'version'), ('te-composer', a.te_composer, '--version'), ('sufr', a.sufr, '--version')):
+            if p: self.log(f'  {k}: {p} ({tool_version(p, flag)})')
         self.step('sample', '0 depth sample', self.sample)
         self.step('index', '1 index (sufr)', self.index)
         self.step('ltr-forage', '1-11 ltr-forage', self.ltr_forage)
@@ -713,7 +770,9 @@ class Run:
             # nothing kept: an empty library is the result, not an error in a later step
             for f in ('library.fa', 'library.stk'): open(self.path(f), 'w').close()
             open(self.path('families.tsv'), 'w').write('family\tnew_name\torigin\tkind\tlen\tstatus\tclass\n')
-            self.log(f'done: ltr-forage kept no element; 0 records, 0 families ({(time.time() - t0) / 60:.1f} min)')
+            self.log('Results', 'user')
+            self.log('  ltr-forage kept no element: the library is empty', 'user')
+            self.finish(t0)
             return
         if a.stage_b:
             self.step('precluster', '12 pre-clustering (raw library)', self.precluster)
@@ -730,103 +789,150 @@ class Run:
         self.step('mdepth', '22b depth check of the models', self.mdepth)
         self.step('families', '23 80-80 families', self.families)
         self.step('seeds', '23b seed alignments', self.seeds)
-        nrec = sum(1 for l in open(self.path('library.fa')) if l.startswith('>'))
-        nfam = len({l.split('\t')[0] for l in open(self.path('families.tsv'))} - {'family'})
         if a.evidence_page:
             self.step('evidence', '24 evidence page', self.evidence)
-        try: os.rmdir(self.path('tmp'))   # the default tmpdir, when the steps left it empty
-        except OSError: pass
-        m = (time.time() - t0) / 60
-        self.log(f'done: {nrec} records, {nfam} families ({m:.1f} min)')
+        kinds = [n.split('#')[0].rsplit('_', 1)[-1] for n, _ in read_fasta(self.path('library.fa'))]
+        nfam = len({l.split('\t')[0] for l in open(self.path('families.tsv'))} - {'family'})
+        self.log('Results', 'user')
+        self.log(f'  families: {nfam} ({kinds.count("LTR")} LTR and {kinds.count("INT")} internal models)', 'user')
+        if a.evidence_page:
+            ev = open(self.path('evidence.txt')).read().strip()
+            self.log('  evidence: ' + (ev.split('; ', 1)[1] if '; ' in ev else ev), 'user')
+        self.finish(t0)
+
+    def finish(self, t0):
+        """The products to the outdir: moved, and work/ removed, or copied with --keep-work."""
+        a = self.a
+        done = []
+        for f in PRODUCTS:
+            src, dst = self.path(f), os.path.join(self.top, f)
+            if not os.path.exists(src) or (f == 'evidence.html' and not a.evidence_page): continue
+            if os.path.lexists(dst): os.remove(dst)
+            # a copy, not a link: a later --from rerun rewrites the work file in place
+            if a.keep_work: shutil.copy2(src, dst)
+            else: os.replace(src, dst)
+            done.append(f)
+        if a.keep_work:
+            try: os.rmdir(self.path('tmp'))   # the default tmpdir, when the steps left it empty
+            except OSError: pass
+        else:
+            shutil.rmtree(self.out, ignore_errors=True)
+            if os.path.exists(self.out):
+                self.log(f'  warning: could not remove all of {self.out}', 'warn')
+        self.log(f'  output in {a.outdir}: {", ".join(done)}, run.log'
+                 + ('; intermediate files in work/' if a.keep_work else ''), 'user')
+        self.log(f'done: {(time.time() - t0) / 60:.1f} min', 'user')
+
+
+USER_EPILOG = """\
+Output in <outdir>: library.fa (the library: one LTR and one internal model per family,
+fam<N>_v<k>_LTR|INT#LTR/<class>), library.stk (a seed alignment per model), families.tsv, cand.tsv
+(ltr-forage's per-candidate table), evidence.html (--evidence-page) and run.log (every step, its results,
+and the programs and versions used).
+
+Programs: ltr-forage, sufr, rmblastn (Rust port), te-composer, nail and MMseqs2, from the options above, the
+environment (LTRFORAGE, SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy.
+
+--help-all also lists the development and tuning options and every step; README.md, "Building a family
+library", describes them."""
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0],
-                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__.split('\n', 2)[2])
-    ap.add_argument('genome')
-    ap.add_argument('-o', '--outdir', required=True)
-    ap.add_argument('-t', '--threads', type=int, default=os.cpu_count())
-    ap.add_argument('--tmpdir', help='directory for temporary files of all steps (default: <outdir>/tmp; '
+    # -h lists the options a user sets; --help-all also the development and tuning options, which work either way
+    full = '--help-all' in sys.argv
+    if full: sys.argv = ['-h' if x == '--help-all' else x for x in sys.argv]
+    dev = lambda h: h if full else argparse.SUPPRESS
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog=__doc__.split('\n', 2)[2] if full else USER_EPILOG)
+    ap.add_argument('genome', help='genome assembly, uncompressed FASTA')
+    ap.add_argument('-o', '--outdir', required=True, help='output directory')
+    ap.add_argument('-t', '--threads', type=int, default=os.cpu_count(), help=f'threads (default: all, {os.cpu_count()} here)')
+    ap.add_argument('-v', '--verbose', action='store_true', help='print every step and its results (run.log always has them)')
+    ap.add_argument('--keep-work', action='store_true', help='keep the intermediate files (<outdir>/work: the steps\' files, '
+                    'their logs, the sufr index the run built); a successful run otherwise removes them, and with them --from')
+    ap.add_argument('--tmpdir', help='directory for temporary files of all steps (default: <outdir>/work/tmp; '
                     'the sufr index step needs up to the size of the finished index there, ~9 bytes per genome base)')
-    ap.add_argument('--sufr', dest='sufr_index', help='existing sufr index of the genome (skips step 1; default: '
+    ap.add_argument('--sufr', dest='sufr_index', metavar='INDEX', help='existing sufr index of the genome (skips step 1; default: '
                     '<genome>.sufr beside the genome when it exists, with .fa/.fasta/.fna dropped)')
-    ap.add_argument('--tier', choices=('pbs', 'strict', 'all'), default='pbs', help='singleton clusters kept: identity >= 93 or a PBS '
-                    '(pbs), identity >= 90 and a PBS (strict), or every one (all)')
-    ap.add_argument('--from', dest='from_step', choices=STEPS, help='rerun from this step on')
-    d = ap.add_argument_group('detection')
-    d.add_argument('--no-fastan', action='store_true',
-                   help='search tandem arrays for seeds too (by default arrays found by the FasTAN port are masked: '
-                        'satellite pairs otherwise dominate the run and flood re-extension; gorilla candidate detection '
-                        '7.3 h -> 40 min at 8 threads, with more elements kept at higher curated support)')
-    d.add_argument('--overlaps', choices=('evidence', 'best'), default='evidence',
-                   help='overlapping calls: keep the one with the most evidence after annotation (evidence, default), '
-                        'or LTRharvest\'s best seed similarity per overlapping group before re-extension (best; faster)')
-    d.add_argument('--forage-arg', action='append', default=[], metavar='ARG',
-                   help='pass ARG on to ltr-forage (repeatable; write --forage-arg=--option for options)')
-    d.add_argument('--mask-bed', metavar='BED', help='also mask these intervals (sequence name, 0-based start, end)')
-    g = ap.add_argument_group('depth sample and floors')
-    g.add_argument('--sample-above', type=float, default=200, help='sample genomes over this many non-N Mb (200)')
-    g.add_argument('--sample-frac', type=float, default=0.1)
-    g.add_argument('--window-kb', type=int, default=100)
-    g.add_argument('--seed', type=int, default=1)
-    g.add_argument('--sample-file', help='use this FASTA as the depth sample')
-    g.add_argument('--min-depth', type=int, help='default 50 x genome non-N Mb / 373, capped at 50 (rice MSU7: 50)')
-    g.add_argument('--abs-depth', type=int, help='default 10 x min depth')
-    m = ap.add_argument_group('family models')
-    m.add_argument('--min-cons', type=int, default=3, help='consensus for clusters of at least this many elements (3; 0: exemplars only)')
-    m.add_argument('--stage-a', action='store_true',
-                   help='depth-clean and re-cluster every element (the older flow) instead of clustering the raw library '
-                        'first and representing clusters >= --min-cons by their consensus (stage B, the default)')
-    m.add_argument('--greedy-above', type=float, default=100,
-                   help='step 12 clusters greedily when the probe projects more than this many million all-vs-all hits '
-                        '(100; 0: always greedy; -1: never, and no probe)')
-    m.add_argument('--greedy-batch', type=int, default=2000, help='elements per all-vs-all batch of greedy step 12 (2000)')
-    m.add_argument('--greedy-reps', type=int, default=100, help='representatives per cluster in greedy step 12 (100)')
-    m.add_argument('--no-flank', action='store_true', help='skip the segmental-duplication flank filter')
-    m.add_argument('--no-model-depth', action='store_true', help='skip step 22b, the depth check of the finished models')
-    m.add_argument('--depth-rounds', type=int, default=3, help='rounds of the step 14 depth cleanup (3; 0 skips it)')
-    m.add_argument('--no-depth-remap', action='store_true',
-                   help='search the cut records again in step 14 rounds after the first.  By default those rounds search '
-                        'nothing: the last round\'s cuts are applied to its hits (alignments clipped, rescored, joined '
-                        'across a cut), which is close to the searched rounds but not identical')
-    m.add_argument('--depth-word', type=int, default=9, help='rmblastn seed word size of the step 14 and 22b depth searches (9, as RepeatMasker)')
-    m.add_argument('--polya-family', type=int, default=10, metavar='N',
-                   help="veto a kept element when half of each LTR is covered by N of 2,000 sampled LTRs of poly-A-vetoed candidates (10; 0: off)")
-    m.add_argument('--polya-pool', type=int, default=2000, metavar='N',
-                   help="run the poly-A family veto (and the poly-A repeat cut) only when ltr-forage vetoed at least N candidates for poly-A "
-                        "tails, not counting those with an LTR domain hit (2000: the sample is then always full).  Not measured: genomes "
-                        "with 80 to 17,000 such candidates; the step's log line gives the count")
-    m.add_argument('--no-polya-rescue', action='store_true',
-                   help="do not keep again the elements that lost the overlap choice only to elements the poly-A family veto removes")
-    m.add_argument('--early-tier', action='store_true', help="drop raw singletons the tier would reject before step 14")
-    m.add_argument('--seed-copies', type=int, default=50, help='genome copies per seed alignment in library.stk (50)')
-    m.add_argument('--mask-warn', type=float, default=2.0, metavar='PCT',
-                   help='report only: name in the log any record estimated (step 23b\'s sample search) to mask at least '
-                        'PCT percent of the non-N genome; families.tsv gets every record\'s estimate (est_genome_pct). '
-                        'A warning means look at the record: L1 or SINE sequence called LTR is the known failure, and '
-                        'very abundant real LTR families also reach it (maize). 0: no warning (2.0)')
-    m.add_argument('--int-copies-max', type=float,
-                   help='step 22b drops an internal model with more genome copies than this per element of its cluster '
-                        '(2000 with --early-tier, otherwise off; 0: off)')
-    m.add_argument('--depth-jump-fold', type=float, default=20,
-                   help='step 22b drops an LTR model without TSD or TG..CA whose depth rose this many times after the cuts (20; 0: off)')
-    m.add_argument('--model-depth-ratio', type=float, default=5,
-                   help='step 22b cuts an exemplar model where depth is at least this many times its median (5)')
+    ap.add_argument('--from', dest='from_step', choices=STEPS, metavar='STEP', help='rerun from this step on (needs the intermediate '
+                    'files: a run with --keep-work, or one that stopped; --help-all lists the steps)')
+    ap.add_argument('--help-all', action='store_true', help='also list the development and tuning options')
+    lb = ap.add_argument_group('library')
+    lb.add_argument('--tier', choices=('pbs', 'strict', 'all'), default='pbs', help='single-element families kept: LTR identity >= 93 '
+                    'or a PBS (pbs, default), identity >= 90 and a PBS (strict), or every one (all)')
+    lb.add_argument('--mask-bed', metavar='BED', help='regions to leave out of the search (sequence name, 0-based start, end)')
+    lb.add_argument('--seed-copies', type=int, default=50, metavar='N', help='genome copies per seed alignment in library.stk (50)')
+    lb.add_argument('--mask-warn', type=float, default=2.0, metavar='PCT',
+                    help='warn about any record estimated to mask at least PCT percent of the genome: look at it before use '
+                         '(a LINE or SINE called LTR, or a very abundant real family); report only, families.tsv has every '
+                         'record\'s estimate (2.0; 0: no warning)')
     e = ap.add_argument_group('evidence page')
     e.add_argument('--evidence-page', action='store_true', help='also write evidence.html: one dossier per family')
     e.add_argument('--evidence-reference', metavar='LIB', help='curated library to measure each family against on the page')
-    t = ap.add_argument_group('programs and data')
-    t.add_argument('--ltr-forage', dest='ltr_forage')
-    t.add_argument('--sufr-bin', dest='sufr')
-    t.add_argument('--rmblastn')
-    t.add_argument('--te-composer', dest='te_composer')
-    t.add_argument('--nail')
-    t.add_argument('--mmseqs')
-    t.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(ROOT, 'data', 'TEdomains.hmm')),
+    t = ap.add_argument_group('programs and data (when not found in the environment or on PATH)')
+    t.add_argument('--ltr-forage', dest='ltr_forage', metavar='PATH', help='ltr-forage binary ($LTRFORAGE)')
+    t.add_argument('--sufr-bin', dest='sufr', metavar='PATH', help='sufr binary ($SUFR), for building the index')
+    t.add_argument('--rmblastn', metavar='PATH', help='rmblastn, the Rust port >= 3.0.9 ($RMBLASTN)')
+    t.add_argument('--te-composer', dest='te_composer', metavar='PATH', help='te-composer >= 0.6.6 ($TE_COMPOSER)')
+    t.add_argument('--nail', metavar='PATH', help='nail >= 0.7.1 ($NAIL)')
+    t.add_argument('--mmseqs', metavar='PATH', help='MMseqs2 ($MMSEQS)')
+    t.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(ROOT, 'data', 'TEdomains.hmm')), metavar='HMM',
                    help="protein profiles for ltr-forage's domain search (default: data/TEdomains.hmm, 122 Pfam profiles with their "
                         "class, see data/domains/README.md; data/TEfam.hmm is LTR_retriever's file)")
-    t.add_argument('--word', type=int, default=16, help='rmblastn seed word for the library all-vs-all (16; 12 gave the same '
-                   'scores within 0.05 points on rice, lotus and mouse, with step 12 up to 2x slower)')
+    d = ap.add_argument_group('detection (development)')
+    d.add_argument('--no-fastan', action='store_true',
+                   help=dev('search tandem arrays for seeds too (by default arrays found by the FasTAN port are masked: '
+                            'satellite pairs otherwise dominate the run and flood re-extension; gorilla candidate detection '
+                            '7.3 h -> 40 min at 8 threads, with more elements kept at higher curated support)'))
+    d.add_argument('--overlaps', choices=('evidence', 'best'), default='evidence',
+                   help=dev('overlapping calls: keep the one with the most evidence after annotation (evidence, default), '
+                            'or LTRharvest\'s best seed similarity per overlapping group before re-extension (best; faster)'))
+    d.add_argument('--forage-arg', action='append', default=[], metavar='ARG',
+                   help=dev('pass ARG on to ltr-forage (repeatable; write --forage-arg=--option for options)'))
+    g = ap.add_argument_group('depth sample and floors (development)')
+    g.add_argument('--sample-above', type=float, default=200, help=dev('sample genomes over this many non-N Mb (200)'))
+    g.add_argument('--sample-frac', type=float, default=0.1, help=dev('fraction of the genome sampled above --sample-above (0.1)'))
+    g.add_argument('--window-kb', type=int, default=100, help=dev('sample window (100 kb)'))
+    g.add_argument('--seed', type=int, default=1, help=dev('random seed of the depth sample and the poly-A family veto (1)'))
+    g.add_argument('--sample-file', help=dev('use this FASTA as the depth sample'))
+    g.add_argument('--min-depth', type=int, help=dev('default 50 x genome non-N Mb / 373, capped at 50 (rice MSU7: 50)'))
+    g.add_argument('--abs-depth', type=int, help=dev('default 10 x min depth'))
+    m = ap.add_argument_group('family models (development)')
+    m.add_argument('--min-cons', type=int, default=3, help=dev('consensus for clusters of at least this many elements (3; 0: exemplars only)'))
+    m.add_argument('--stage-a', action='store_true',
+                   help=dev('depth-clean and re-cluster every element (the older flow) instead of clustering the raw library '
+                        'first and representing clusters >= --min-cons by their consensus (stage B, the default)'))
+    m.add_argument('--greedy-above', type=float, default=100,
+                   help=dev('step 12 clusters greedily when the probe projects more than this many million all-vs-all hits '
+                        '(100; 0: always greedy; -1: never, and no probe)'))
+    m.add_argument('--greedy-batch', type=int, default=2000, help=dev('elements per all-vs-all batch of greedy step 12 (2000)'))
+    m.add_argument('--greedy-reps', type=int, default=100, help=dev('representatives per cluster in greedy step 12 (100)'))
+    m.add_argument('--no-flank', action='store_true', help=dev('skip the segmental-duplication flank filter'))
+    m.add_argument('--no-model-depth', action='store_true', help=dev('skip step 22b, the depth check of the finished models'))
+    m.add_argument('--depth-rounds', type=int, default=3, help=dev('rounds of the step 14 depth cleanup (3; 0 skips it)'))
+    m.add_argument('--no-depth-remap', action='store_true',
+                   help=dev('search the cut records again in step 14 rounds after the first.  By default those rounds search '
+                        'nothing: the last round\'s cuts are applied to its hits (alignments clipped, rescored, joined '
+                        'across a cut), which is close to the searched rounds but not identical'))
+    m.add_argument('--depth-word', type=int, default=9, help=dev('rmblastn seed word size of the step 14 and 22b depth searches (9, as RepeatMasker)'))
+    m.add_argument('--polya-family', type=int, default=10, metavar='N',
+                   help=dev("veto a kept element when half of each LTR is covered by N of 2,000 sampled LTRs of poly-A-vetoed candidates (10; 0: off)"))
+    m.add_argument('--polya-pool', type=int, default=2000, metavar='N',
+                   help=dev("run the poly-A family veto (and the poly-A repeat cut) only when ltr-forage vetoed at least N candidates for poly-A "
+                        "tails, not counting those with an LTR domain hit (2000: the sample is then always full).  Not measured: genomes "
+                        "with 80 to 17,000 such candidates; the step's log line gives the count"))
+    m.add_argument('--no-polya-rescue', action='store_true',
+                   help=dev("do not keep again the elements that lost the overlap choice only to elements the poly-A family veto removes"))
+    m.add_argument('--early-tier', action='store_true', help=dev("drop raw singletons the tier would reject before step 14"))
+    m.add_argument('--int-copies-max', type=float,
+                   help=dev('step 22b drops an internal model with more genome copies than this per element of its cluster '
+                        '(2000 with --early-tier, otherwise off; 0: off)'))
+    m.add_argument('--depth-jump-fold', type=float, default=20,
+                   help=dev('step 22b drops an LTR model without TSD or TG..CA whose depth rose this many times after the cuts (20; 0: off)'))
+    m.add_argument('--model-depth-ratio', type=float, default=5,
+                   help=dev('step 22b cuts an exemplar model where depth is at least this many times its median (5)'))
+    m.add_argument('--word', type=int, default=16, help=dev('rmblastn seed word for the library all-vs-all (16; 12 gave the same '
+                   'scores within 0.05 points on rice, lotus and mouse, with step 12 up to 2x slower)'))
     a = ap.parse_args()
     if not os.path.isfile(a.genome):
         sys.exit(f'ltr_library: genome not found: {a.genome}')
@@ -842,22 +948,18 @@ def main():
         if os.path.isfile(idx):
             if os.path.getmtime(idx) >= os.path.getmtime(a.genome): a.sufr_index = idx
             else: print(f'ltr_library: not using {idx}: it is older than the genome (--sufr {idx} to use it anyway)', file=sys.stderr)
-    a.ltr_forage = find_tool(a.ltr_forage, 'LTRFORAGE', 'ltr-forage', [os.path.join(ROOT, 'target', 'release', 'ltr-forage')])
-    a.rmblastn = find_tool(a.rmblastn, 'RMBLASTN', 'rmblastn',
-                           ['/usr/local/rmblast/bin/rmblastn', os.path.join(ROOT, '..', '..', 'rmblast-port', 'rmblast', 'target', 'release', 'rmblastn')],
-                           check='Rust port', min_version=(3, 0, 9), flag='-version')
-    a.nail = find_tool(a.nail, 'NAIL', 'nail', ['/usr/local/nail/nail'], min_version=(0, 7, 1))
-    a.mmseqs = find_tool(a.mmseqs, 'MMSEQS', 'mmseqs', ['/usr/local/mmseqs2/bin/mmseqs'])
+    a.ltr_forage = find_tool(a.ltr_forage, 'LTRFORAGE', 'ltr-forage')
+    a.rmblastn = find_tool(a.rmblastn, 'RMBLASTN', 'rmblastn', check='Rust port', min_version=(3, 0, 9), flag='-version')
+    a.nail = find_tool(a.nail, 'NAIL', 'nail', min_version=(0, 7, 1))
+    a.mmseqs = find_tool(a.mmseqs, 'MMSEQS', 'mmseqs')
     v = subprocess.run([a.rmblastn, '-version'], capture_output=True, text=True).stdout.split()
     if v[1:2] == ['3.0.10'] and 'MT_MODE' not in os.environ:
         os.environ['MT_MODE'] = '0'   # 3.0.10's streaming --mt-mode 1 can deadlock (fixed in 3.0.11)
     a.stage_b = not a.stage_a and a.min_cons >= 2   # stage B needs consensus representatives
     # consensus models (step 22) and the seed alignments (step 23b)
-    a.te_composer = find_tool(a.te_composer, 'TE_COMPOSER', 'te-composer',
-                              [os.path.join(ROOT, '..', '..', 'dfam-curator', 'target', 'release', 'te-composer')],
-                              min_version=(0, 6, 6))
+    a.te_composer = find_tool(a.te_composer, 'TE_COMPOSER', 'te-composer', min_version=(0, 6, 6))
     if not a.sufr_index:
-        a.sufr = find_tool(a.sufr, 'SUFR', 'sufr', [os.path.join(ROOT, '..', 'sufr', 'target', 'release', 'sufr')])
+        a.sufr = find_tool(a.sufr, 'SUFR', 'sufr')
     if not os.path.isfile(a.domain_hmm):
         sys.exit(f'ltr_library: domain HMM file not found: {a.domain_hmm} (give --domain-hmm)')
     a.domain_hmm = os.path.abspath(a.domain_hmm)   # the steps run in the output directory

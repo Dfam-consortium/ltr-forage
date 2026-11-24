@@ -537,6 +537,7 @@ dependencies = [
 [[package]]
 name = "libsufr"
 version = "0.7.12"
+source = "git+https://github.com/TravisWheelerLab/sufr.git?rev=b4a924a#b4a924a37cce88a4082aefba5748d57f38e9ad03"
 dependencies = [
  "anyhow",
  "bincode",
@@ -573,6 +574,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "libsufr",
  "rayon",
  "rmblast-lib",

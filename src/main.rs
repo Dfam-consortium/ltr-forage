@@ -7,6 +7,8 @@ use libsufr::{
 };
 use rayon::prelude::*;
 
+#[macro_use]
+mod log;
 mod decide;
 mod domain;
 mod features;
@@ -34,7 +36,7 @@ enum OutputFormat {
 // --------------------------------------------------
 #[derive(Parser, Debug)]
 #[command(
-    version,
+    version = env!("LTRFORAGE_VERSION"),
     name = "ltr-forage",
     about = "Identify LTR retrotransposon candidates using a sufr suffix array index",
     allow_negative_numbers = true,
@@ -69,23 +71,23 @@ struct Args {
     similar: f64,
 
     /// X-drop score threshold for extension alignment
-    #[arg(short = 'x', long, default_value_t = 5, value_name = "SCORE")]
+    #[arg(short = 'x', long, default_value_t = 5, value_name = "SCORE", hide = true)]
     xdrop: i32,
 
     /// Match score for extension alignment
-    #[arg(long, default_value_t = 2)]
+    #[arg(long, default_value_t = 2, hide = true)]
     mat: i32,
 
     /// Mismatch score for extension alignment (negative)
-    #[arg(long, default_value_t = -2)]
+    #[arg(long, default_value_t = -2, hide = true)]
     mis: i32,
 
     /// Insertion score for extension alignment (negative)
-    #[arg(long, default_value_t = -3)]
+    #[arg(long, default_value_t = -3, hide = true)]
     ins: i32,
 
     /// Deletion score for extension alignment (negative)
-    #[arg(long, default_value_t = -3)]
+    #[arg(long, default_value_t = -3, hide = true)]
     del: i32,
 
     /// LTRharvest mode: GenomeTools LTRharvest's search and nothing more.
@@ -119,14 +121,14 @@ struct Args {
 
     /// Choose among TSD candidates LTR_retriever's way (tiers) instead of
     /// gt's (smallest boundary shift)
-    #[arg(long, requires = "ltrharvest")]
+    #[arg(long, requires = "ltrharvest", hide = true)]
     tiered_tsd: bool,
 
     /// After re-extension: treat candidates whose final outer ends both lie
     /// within this many bases of a better candidate's as duplicates (higher
     /// final LTR identity wins); seeds of one element stop their X-drop runs
     /// hundreds of bases apart but re-extend to the same ends; 0 disables
-    #[arg(long, default_value_t = 20, value_name = "BP")]
+    #[arg(long, default_value_t = 20, value_name = "BP", hide = true)]
     dedup_tol: usize,
 
     /// Overlapping candidates: evidence (keep all through annotation, then
@@ -135,11 +137,11 @@ struct Args {
     /// before re-extension, keep the highest seed similarity of each group of
     /// overlapping candidates), no (drop every overlapping candidate), all
     /// (keep them all) [default: evidence; best with --ltrharvest]
-    #[arg(long, value_enum, value_name = "STRATEGY")]
+    #[arg(long, value_enum, value_name = "STRATEGY", hide = true)]
     overlaps: Option<Overlaps>,
 
     /// Number of threads (0 = all available CPUs)
-    #[arg(short = 'j', long, default_value_t = 0, value_name = "N")]
+    #[arg(short = 't', short_alias = 'j', long, default_value_t = 0, value_name = "N")]
     threads: usize,
 
     /// Output format on stdout [default: tsv; gt with --ltrharvest]
@@ -150,11 +152,11 @@ struct Args {
     /// (bp).  7000 covers the longest LTR in the curated libraries we tested
     /// (rice, 6,144 bp); 2500 is enough for vertebrates and Arabidopsis and
     /// is faster on genomes with many tandem arrays (see the README)
-    #[arg(long, default_value_t = 7000, value_name = "BP")]
+    #[arg(long, default_value_t = 7000, value_name = "BP", hide = true)]
     reextend_ltr_max: usize,
 
     /// Extra window beyond that on the outer side of each LTR (bp)
-    #[arg(long, default_value_t = 100, value_name = "BP")]
+    #[arg(long, default_value_t = 100, value_name = "BP", hide = true)]
     reextend_vicinity: usize,
 
     /// Re-extend with a window of this many bp first (0: off).  A
@@ -163,35 +165,37 @@ struct Args {
     /// --reextend-first-margin of the window edge with both LTRs below
     /// --tandem-max self-repeat; satellite pairs that run to the edge are
     /// vetoed on the short window's LTRs (see the README)
-    #[arg(long, default_value_t = 2500, value_name = "BP")]
+    #[arg(long, default_value_t = 2500, value_name = "BP", hide = true)]
     reextend_first: usize,
 
     /// With --reextend-first: a first-pass alignment ending within this many
     /// bp of a window edge is searched again with the full window
-    #[arg(long, default_value_t = 500, value_name = "BP")]
+    #[arg(long, default_value_t = 500, value_name = "BP", hide = true)]
     reextend_first_margin: usize,
 
     /// Terminal alignment window that must be clean for an end to stand (columns)
-    #[arg(long, default_value_t = 6, value_name = "N")]
+    #[arg(long, default_value_t = 6, value_name = "N", hide = true)]
     trim_window: usize,
 
     /// Matches required inside that terminal window
-    #[arg(long, default_value_t = 6, value_name = "N")]
+    #[arg(long, default_value_t = 6, value_name = "N", hide = true)]
     trim_matches: usize,
 
     /// Count 20-mers from each internal region against the genome index and
     /// report their coverage and the longest single-copy stretch (tsv output);
     /// loads the suffix array into memory
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, hide = true)]
     internal_stats: bool,
 
     /// HMMER3 file of transposable-element protein profiles; each
     /// candidate's six-frame translation is searched against it with nail
     /// (needs nail and MMseqs2, see --nail and --mmseqs) and the order,
-    /// superfamily and strand reported.  The default is data/TEdomains.hmm
-    /// (122 Pfam profiles that carry their class, data/domains/README.md);
+    /// superfamily and strand reported.  The default is the TEdomains.hmm
+    /// shipped with ltr-forage, in data/ beside bin/ (an installed release) or
+    /// two levels above the binary (target/release in a source checkout): 122
+    /// Pfam profiles that carry their class, data/domains/README.md;
     /// LTR_retriever's TEfam.hmm is also shipped in data/
-    #[arg(long, value_name = "FILE", default_value = DEFAULT_HMM)]
+    #[arg(long, value_name = "FILE", default_value_t = default_hmm())]
     domain_hmm: String,
 
     /// Skip the protein-domain search (decisions then rest on the TSD,
@@ -200,7 +204,7 @@ struct Args {
     no_domains: bool,
 
     /// E-value threshold for a domain hit
-    #[arg(long, default_value_t = 0.05, value_name = "E")]
+    #[arg(long, default_value_t = 0.05, value_name = "E", hide = true)]
     domain_evalue: f64,
 
     /// Database size for the domain E-values (nail's -Z).  A constant, so
@@ -208,19 +212,19 @@ struct Args {
     /// the genome has; the default is six frames of 20,000 candidates.
     /// 0: six frames per candidate of this run, as hmmsearch would count
     /// them (the rule before this option)
-    #[arg(long, default_value_t = 120_000, value_name = "N")]
+    #[arg(long, default_value_t = 120_000, value_name = "N", hide = true)]
     domain_z: usize,
 
     /// Bases added on each side of the element before translation
-    #[arg(long, default_value_t = 50, value_name = "BP")]
+    #[arg(long, default_value_t = 50, value_name = "BP", hide = true)]
     domain_flank: usize,
 
     /// nail binary for the domain search (a path, or a name on PATH)
-    #[arg(long, default_value = "nail", value_name = "PATH")]
+    #[arg(long, env = "NAIL", default_value = "nail", value_name = "PATH")]
     nail: String,
 
     /// MMseqs2 binary nail seeds with (a path, or a name on PATH)
-    #[arg(long, default_value = "mmseqs", value_name = "PATH")]
+    #[arg(long, env = "MMSEQS", default_value = "mmseqs", value_name = "PATH")]
     mmseqs: String,
 
     /// Directory for scratch files (the domain search's six-frame proteins
@@ -232,7 +236,7 @@ struct Args {
     /// Keep candidates with a polyprotein domain hit inside an LTR (by
     /// default they are vetoed: an LTR does not encode the polyprotein, so
     /// the hit means the "LTR" is internal sequence)
-    #[arg(long)]
+    #[arg(long, hide = true)]
     keep_coding_ltrs: bool,
 
     /// Write the kept elements as a FASTA library: left LTR, internal
@@ -249,35 +253,35 @@ struct Args {
 
     /// Also reject a candidate whose internal region has a single-copy
     /// stretch longer than this fraction of it (needs --internal-stats)
-    #[arg(long, value_name = "FRAC")]
+    #[arg(long, value_name = "FRAC", hide = true)]
     internal_gap_max: Option<f64>,
 
     /// Reject a candidate when either LTR aligns to itself off the diagonal
     /// over at least this fraction of its length (satellite monomers, Alu
     /// dimers, microsatellites); values above 1 disable the check
-    #[arg(long, default_value_t = 0.99, value_name = "FRAC")]
+    #[arg(long, default_value_t = 0.99, value_name = "FRAC", hide = true)]
     tandem_max: f64,
 
     /// Do not reject candidates whose two LTRs both end in a poly-A tail
     /// without the TG..CA termini (non-LTR retroposon 3' ends)
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, hide = true)]
     no_polya_veto: bool,
 
     /// Run the domain searches on candidates the LTR self-repeat check has
     /// already rejected too (their table domain columns are "." otherwise);
     /// the decisions do not change
-    #[arg(long)]
+    #[arg(long, hide = true)]
     domain_search_vetoed: bool,
 
     /// Skip the genome tRNA scan behind the PBS columns (they are then ".")
     /// and the PBS's part in --overlaps evidence
-    #[arg(long)]
+    #[arg(long, hide = true)]
     no_pbs_trna: bool,
 
     /// Search for the PBS only on the strand the protein domains give
     /// (default: both strands; the domain strand follows the majority of
     /// hits and is wrong for some rice Gypsy families)
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pbs_domain_strand: bool,
 
     /// Write the genome's tRNA library to FILE (FASTA, one entry per distinct
@@ -288,12 +292,12 @@ struct Args {
 
     /// Longest tRNA intron searched for (0 = none; 3000, the default, is
     /// ARAGORN's -i default and its upper limit)
-    #[arg(long, default_value_t = trna::MAXINTRONLEN, value_name = "BP", value_parser = clap::value_parser!(i64).range(0..=trna::MAXINTRONLEN))]
+    #[arg(long, default_value_t = trna::MAXINTRONLEN, value_name = "BP", value_parser = clap::value_parser!(i64).range(0..=trna::MAXINTRONLEN), hide = true)]
     trna_intron_max: i64,
 
     /// Only scan FASTA for tRNA genes (ARAGORN -t -gc1 -l -i port), print
     /// the calls as a table and exit; no SUFR index is needed
-    #[arg(long, value_name = "FASTA")]
+    #[arg(long, value_name = "FASTA", hide = true)]
     trna_scan: Option<String>,
 
     /// Also mask the intervals in FILE (BED: name, 0-based start, end) from
@@ -307,7 +311,7 @@ struct Args {
     /// seed search; the sequence itself is unchanged.  An array of unit p
     /// yields a seed pair between almost every two units, so without the mask
     /// centromeric and satellite arrays dominate the run time
-    #[arg(long, conflicts_with = "ltrharvest")]
+    #[arg(long, conflicts_with = "ltrharvest", hide = true)]
     no_fastan: bool,
 
     /// Write the FasTAN-port arrays to FILE (BED: name, start, end, period,
@@ -316,11 +320,35 @@ struct Args {
     fastan_out: Option<String>,
 
     /// Only run the FasTAN port (writes --fastan-out) and exit
-    #[arg(long, requires = "fastan_out")]
+    #[arg(long, requires = "fastan_out", hide = true)]
     fastan_only: bool,
+
+    /// Print every step's numbers as the run goes (the screen otherwise shows
+    /// the stages and the results; --log gets everything)
+    #[arg(short = 'v', long)]
+    verbose: bool,
+
+    /// Also write the whole log (every step's numbers) to FILE
+    #[arg(long, value_name = "FILE")]
+    log: Option<String>,
+
+    /// Also list the development and tuning options
+    #[arg(long)]
+    help_all: bool,
 }
 
-const DEFAULT_HMM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/TEdomains.hmm");
+/// The shipped profile file, found from the binary's own location: <prefix>/data/ for <prefix>/bin/ltr-forage
+/// (a release), or the checkout's data/ for <checkout>/target/release/ltr-forage.  When neither exists the
+/// installed path is named, and the start-up check reports it as missing.
+fn default_hmm() -> String {
+    let exe = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
+    let dir = exe.as_deref().and_then(|p| p.parent());
+    let cands: Vec<std::path::PathBuf> = [1usize, 2]
+        .iter()
+        .filter_map(|&up| dir.and_then(|d| d.ancestors().nth(up)).map(|r| r.join("data").join("TEdomains.hmm")))
+        .collect();
+    cands.iter().find(|p| p.is_file()).or(cands.first()).map_or("data/TEdomains.hmm".to_string(), |p| p.display().to_string())
+}
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 enum Overlaps {
@@ -328,6 +356,19 @@ enum Overlaps {
     Best,
     No,
     All,
+}
+
+/// The element's coding strand: the protein domains' strand, else the PBS's (the PBS follows the 5′
+/// LTR); "?" without either, or when the two disagree.
+fn element_strand(dom: Option<&str>, pbs: Option<&pbs::PbsHit>) -> &'static str {
+    let d = match dom { Some("+") => Some("+"), Some("-") => Some("-"), _ => None };
+    let p = pbs.map(|h| if h.minus { "-" } else { "+" });
+    match (d, p) {
+        (Some(a), Some(b)) if a != b => "?",
+        (Some(a), _) => a,
+        (None, Some(b)) => b,
+        (None, None) => "?",
+    }
 }
 
 /// Elapsed time as 41.2s or 9m21s.
@@ -562,7 +603,7 @@ fn overlapping_keep_indices(
 /// Size the global thread pool; says so when that fails (the run would then use every core).
 fn set_threads(n: usize) {
     if let Err(e) = rayon::ThreadPoolBuilder::new().num_threads(n).build_global() {
-        eprintln!("warning: could not set {} thread(s) ({}); running with {}", n, e, rayon::current_num_threads());
+        log_warn!("could not set {} thread(s) ({}); running with {}", n, e, rayon::current_num_threads());
     }
 }
 
@@ -579,6 +620,7 @@ where
     // Loads the text (needed for random access throughout); the suffix array
     // and LCP array stay on disk and are streamed once in phase 1.
     let t_start = std::time::Instant::now();
+    log_user!("{}", if args.ltrharvest { "Index (stage 1)" } else { "Index and Tandem-Array Mask (stages 1-2)" });
     let sufr = args.sufr.as_deref().context("a SUFR index is required")?;
     let mut sf: SufrFile<T> = SufrFile::read(sufr, false)?;
 
@@ -600,14 +642,15 @@ where
     let sa_pos = sf.suffix_array_pos as u64;
     let lcp_pos = sf.lcp_pos as u64;
 
-    eprintln!(
+    log_detail!(
         "[1 index] {} sequence(s), {} suffixes, text length {}; text loaded in {}",
         sf.num_sequences.to_usize(),
         num_suffixes,
         sf.text_len.to_usize(),
         el(&t_start),
     );
-    eprintln!(
+    log_user!("  {} sequence(s), {:.1} Mb", log::n(sf.num_sequences.to_usize()), sf.text_len.to_usize() as f64 / 1e6);
+    log_detail!(
         "[1 index] {}parameters: min_seed={} ltr=[{},{}] dist=[{},{}] similar={:.0}% xdrop={}",
         if args.ltrharvest { "LTRharvest mode; " } else { "" },
         args.min_seed,
@@ -638,14 +681,16 @@ where
         let (iv, bp, unknown) = read_bed(path, &seq_names, &seq_starts, text.len())?;
         let n = iv.len();
         extra.extend(iv);
-        eprintln!("[2 tandem mask] BED: {} interval(s), {:.1} Mb{}", n, bp as f64 / 1e6,
-                  if unknown > 0 { format!(" ({} on sequences not in the index, ignored)", unknown) } else { String::new() });
+        log_detail!("[2 tandem mask] BED: {} interval(s), {:.1} Mb{}", n, bp as f64 / 1e6,
+                    if unknown > 0 { format!(" ({} on sequences not in the index, ignored)", unknown) } else { String::new() });
+        log_user!("  {} interval(s) of {} masked ({:.1} Mb)", log::n(n), path, bp as f64 / 1e6);
     }
     if !args.ltrharvest && !args.no_fastan {
         let t0 = std::time::Instant::now();
         let arrays = fastan::tandem_arrays(text, &seq_starts);
         let bp: usize = arrays.iter().map(|a| a.aend - a.bbeg).sum();
-        eprintln!("[2 tandem mask] FasTAN port: {} array(s), {:.1} Mb before merging ({})", arrays.len(), bp as f64 / 1e6, el(&t0));
+        log_detail!("[2 tandem mask] FasTAN port: {} array(s), {:.1} Mb before merging ({})", arrays.len(), bp as f64 / 1e6, el(&t0));
+        log_user!("  {} tandem array(s) masked ({:.1} Mb)", log::n(arrays.len()), bp as f64 / 1e6);
         if let Some(path) = &args.fastan_out {
             use std::io::Write;
             let mut w = std::io::BufWriter::new(std::fs::File::create(path)?);
@@ -657,10 +702,12 @@ where
             w.flush()?;
         }
         if args.fastan_only {
+            log_user!("done: {:.1} min", t_start.elapsed().as_secs_f64() / 60.0);
             std::process::exit(0);
         }
         extra.extend(arrays.iter().map(|a| (seq_starts[a.seq] + a.bbeg, seq_starts[a.seq] + a.aend)));
     }
+    log_user!("{}", if args.ltrharvest { "Candidate Detection: LTRharvest's search (stages 3-5, 10)" } else { "Candidate Detection (stages 3-7)" });
     let wild = maxpairs::WildRuns::new(text);
     let mask = maxpairs::WildRuns::masked(&extra);
     let n_pieces = rayon::current_num_threads() * 4;
@@ -698,7 +745,8 @@ where
     for piece in per_piece {
         seeds.extend(piece?);
     }
-    eprintln!("[3 seed pairs] {} seed pair(s) ({} piece(s); {} elapsed)", seeds.len(), pieces.len(), el(&t_start));
+    log_detail!("[3 seed pairs] {} seed pair(s) ({} piece(s); {} elapsed)", seeds.len(), pieces.len(), el(&t_start));
+    let n_seeds = seeds.len();
     // ---- 4: extend, TSD/motif, constraints, similarity (GT's order) ----
     // GT runs these per seed inside gt_searchforLTRs: x-drop extension, then the
     // TSD/motif search (which moves the outer boundaries), then the length and
@@ -782,7 +830,7 @@ where
             Some((seed_idx, cand, ti))
         })
         .collect();
-    eprintln!(
+    log_detail!(
         "[4 X-drop extension] {} candidate(s) {} ({} elapsed)",
         paired.len(),
         if args.ltrharvest { "after extension, TSD/motif search and similarity" } else { "at the similarity threshold" },
@@ -801,7 +849,7 @@ where
     // Strip the seed index — no longer needed.
     let paired: Vec<(ltr::LtrCandidate, tsd::TsdMotifInfo)> =
         paired.into_iter().map(|(_, c, ti)| (c, ti)).collect();
-    eprintln!("[5 duplicates] {} candidate(s) after removing identical ends", paired.len());
+    log_detail!("[5 duplicates] {} candidate(s) after removing identical ends", paired.len());
 
     // ---- 10 (best, no): remove overlapping predictions before re-extension ----
     // Already sorted by (seq_num, left_ltr_start, right_ltr_end) by step 5.
@@ -812,7 +860,7 @@ where
         Overlaps::No | Overlaps::Best => {
             let no = st.overlaps == Overlaps::No;
             let idx = overlapping_keep_indices(&cands_for_overlap, no);
-            eprintln!("[10 overlaps] {} candidate(s) after overlap removal ({}, before re-extension)", idx.len(), if no { "no" } else { "best" });
+            log_detail!("[10 overlaps] {} candidate(s) after overlap removal ({}, before re-extension)", idx.len(), if no { "no" } else { "best" });
             idx
         }
         Overlaps::All | Overlaps::Evidence => (0..paired.len()).collect(),
@@ -825,6 +873,9 @@ where
 
     if args.ltrharvest {
         print_gt(args, st, sufr, &seq_starts, &surviving, &vec![None; surviving.len()]);
+        log_user!("Results");
+        log_user!("  {} LTRharvest prediction(s) from {} seed pair(s); table on stdout", log::n(surviving.len()), log::n(n_seeds));
+        log_user!("done: {:.1} min", t_start.elapsed().as_secs_f64() / 60.0);
         return Ok(());
     }
 
@@ -882,7 +933,7 @@ where
             })
             .collect();
         if two_pass {
-            eprintln!(
+            log_detail!(
                 "[6 re-extension] {} bp window first; {} candidate(s) searched again with {} bp",
                 args.reextend_first, n_second.into_inner(), args.reextend_ltr_max,
             );
@@ -897,7 +948,7 @@ where
                     || x.right_ltr_start != ti.right_ltr_start || x.right_ltr_end != ti.right_ltr_end
             }))
             .count();
-        eprintln!(
+        log_detail!(
             "[6 re-extension] re-extended {} of {} candidate(s), {} moved, {} at a window edge ({} elapsed)",
             n_ok, surviving.len(), n_moved, n_edge, el(&t_start),
         );
@@ -932,11 +983,13 @@ where
         }
         let before = surviving.len();
         let (s, r): (Vec<_>, Vec<_>) = surviving.into_iter().zip(reext).zip(keep).filter(|(_, k)| *k).map(|(p, _)| p).unzip();
-        eprintln!("[7 near-duplicate merge] {} of {} candidate(s) left after merging final ends within {} bp", s.len(), before, tol);
+        log_detail!("[7 near-duplicate merge] {} of {} candidate(s) left after merging final ends within {} bp", s.len(), before, tol);
         (s, r)
     } else {
         (surviving, reext)
     };
+
+    log_user!("  {} candidate element(s) from {} seed pair(s)", log::n(surviving.len()), log::n(n_seeds));
 
     // ---- 7b: internal-region statistics (optional) ----
     let final_coords: Vec<(usize, usize, usize, usize)> = surviving
@@ -954,7 +1007,7 @@ where
             .collect();
         let n_tiles: usize = regions.iter().map(|r| r.len()).sum();
         let counts = internal::count_tiles(&mut sf, &regions)?;
-        eprintln!(
+        log_detail!(
             "[7b internal 20-mers] counted {} tile(s), {} distinct k-mer(s) with reverse complements ({} elapsed)",
             n_tiles, counts.len(), el(&t_start),
         );
@@ -964,6 +1017,7 @@ where
     };
     let text: &[u8] = &sf.text;
 
+    log_user!("Evidence (stage 8)");
     // ---- 8a: LTR self-alignment (tandem-repeat check) ----
     // First, so the domain searches below can skip what it vetoes (decide()
     // rejects those whatever their domains).
@@ -981,7 +1035,7 @@ where
             })
             .collect()
     };
-    eprintln!(
+    log_detail!(
         "[8a self-alignment] {} candidate(s) with an LTR at least {:.0}% self-repeat ({} elapsed)",
         self_cov.iter().filter(|(a, b)| a.max(*b) >= args.tandem_max).count(),
         100.0 * args.tandem_max,
@@ -1036,17 +1090,17 @@ where
         }
         let n_skip = skip_domains.iter().filter(|&&x| x).count();
         if n_skip > 0 {
-            eprintln!("[8b protein domains] skipping {} candidate(s) vetoed by LTR self-repeat (--domain-search-vetoed searches them)", n_skip);
+            log_detail!("[8b protein domains] skipping {} candidate(s) vetoed by LTR self-repeat (--domain-search-vetoed searches them)", n_skip);
         }
         let with_hits = calls.iter().filter(|d| d.as_ref().map_or(false, |d| !d.hits.is_empty())).count();
         let ltr = calls.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "LTR")).count();
         let not = calls.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "notLTR" || d.order == "mixture")).count();
-        eprintln!(
+        log_detail!(
             "[8b protein domains] nail search ({}): {} candidate(s) with a domain hit, {} LTR order, {} notLTR or mixture ({} elapsed)",
             el(&t0), with_hits, ltr, not, el(&t_start),
         );
         if ltrs {
-            eprintln!(
+            log_detail!(
                 "[8b protein domains] {} candidate(s) with an LTR-list domain hit inside an LTR, {} with a core polyprotein domain",
                 ltr_hits.iter().filter(|v| !v.is_empty()).count(),
                 ltr_hits.iter().filter(|v| v.iter().any(|h| domain::is_core(h))).count(),
@@ -1083,7 +1137,7 @@ where
                 probes.annotate(text, l1e, l2s, lo, hi, strand)
             })
             .collect();
-        eprintln!(
+        log_detail!(
             "[8c tRNA → PBS] {} tRNA gene(s), {} PBS probe(s) ({}); {} candidate(s) with a 12-nt PBS, {} exact ({} elapsed)",
             n_calls, probes.len(), el(&t0),
             out.iter().filter(|(h, _)| h.is_some()).count(),
@@ -1098,10 +1152,10 @@ where
 
     // ---- 8d, 9, 10: TSD and TG..CA at the final ends, decisions, overlaps ----
     if args.internal_gap_max.is_some() && !args.internal_stats {
-        eprintln!("Warning: --internal-gap-max has no effect without --internal-stats");
+        log_warn!("--internal-gap-max has no effect without --internal-stats");
     }
     if st.nail.is_none() && args.keep == decide::KeepLevel::Domain {
-        eprintln!("Warning: --keep domain keeps nothing without the domain search");
+        log_warn!("--keep domain keeps nothing without the domain search");
     }
     let identity: Vec<f64> = surviving
         .iter()
@@ -1118,12 +1172,21 @@ where
              features::polya_ltrs(text, (l1s, l1e, l2s, l2e)))
         })
         .collect();
-    eprintln!(
+    log_detail!(
         "[8d TSD, TG..CA] {} candidate(s) with a TSD of 4-20 bp ({} with one mismatch), {} with TG..CA ends",
         ends.iter().filter(|(t, _, _)| t.len > 0).count(),
         ends.iter().filter(|(t, _, _)| t.len > 0 && t.mismatches > 0).count(),
         ends.iter().filter(|(_, m, _)| features::motif_class(m) == "TGCA").count(),
     );
+    log_user!(
+        "  {} with a protein domain hit ({} LTR order), {} with a PBS, {} with a TSD, {} with TG..CA ends",
+        log::n(domain_calls.iter().filter(|d| d.as_ref().map_or(false, |d| !d.hits.is_empty())).count()),
+        log::n(domain_calls.iter().filter(|d| d.as_ref().map_or(false, |d| d.order == "LTR")).count()),
+        log::n(pbs_calls.iter().filter(|(h, _)| h.is_some()).count()),
+        log::n(ends.iter().filter(|(t, _, _)| t.len > 0).count()),
+        log::n(ends.iter().filter(|(_, m, _)| features::motif_class(m) == "TGCA").count()),
+    );
+    log_user!("Decision and Output (stages 9-11)");
     let mut decisions: Vec<decide::Decision> = ends
         .iter()
         .zip(domain_calls.iter())
@@ -1144,7 +1207,7 @@ where
     let tandem = decisions.iter().filter(|d| d.why.starts_with("veto:tandem")).count();
     let coding = decisions.iter().filter(|d| d.why.starts_with("veto:ltrdomain")).count();
     let polya = decisions.iter().filter(|d| d.why.starts_with("veto:polyA")).count();
-    eprintln!(
+    log_detail!(
         "[9 decision] kept {} of {} candidate(s) at --keep {:?}, {} vetoed by protein hits, {} by LTR self-repeat, {} by a domain inside an LTR, {} by poly-A-tailed LTRs ({} elapsed)",
         kept, decisions.len(), args.keep, vetoed, tandem, coding, polya, el(&t_start),
     );
@@ -1172,23 +1235,28 @@ where
                 spans.insert(s0, e0);
             }
         }
-        eprintln!("[10 overlaps] {} kept candidate(s) dropped as overlapping one with more evidence; {} left", dropped, decisions.iter().filter(|d| d.keep).count());
+        log_detail!("[10 overlaps] {} kept candidate(s) dropped as overlapping one with more evidence; {} left", dropped, decisions.iter().filter(|d| d.keep).count());
     }
+    let strands: Vec<&str> = domain_calls
+        .iter()
+        .zip(pbs_calls.iter())
+        .map(|(dc, (h, _))| element_strand(dc.as_ref().map(|d| d.strand.as_str()), h.as_ref()))
+        .collect();
     if let (Some(path), Some((calls, _))) = (&args.trna_out, &trna_calls) {
         write_trna_library(path, &seq_names, calls, &pbs_calls, &decisions)?;
     }
     if let Some(path) = &args.library {
         let mut out = std::io::BufWriter::new(std::fs::File::create(path).with_context(|| format!("creating {}", path))?);
-        for (((c, _), &ltrs), (d, dc)) in surviving.iter().zip(final_coords.iter()).zip(decisions.iter().zip(domain_calls.iter())) {
+        for ((((c, _), &ltrs), (d, dc)), strand) in surviving.iter().zip(final_coords.iter()).zip(decisions.iter().zip(domain_calls.iter())).zip(strands.iter()) {
             if !d.keep {
                 continue;
             }
             let name = seq_names.get(c.seq_num).map(|s| s.as_str()).unwrap_or("?");
             let sf = dc.as_ref().map(|d| d.superfamily.as_str()).unwrap_or("unknown");
-            decide::write_element(&mut out, name, text, seq_starts[c.seq_num], ltrs, sf, &d.why)?;
+            decide::write_element(&mut out, name, text, seq_starts[c.seq_num], ltrs, sf, &d.why, strand)?;
         }
         std::io::Write::flush(&mut out)?;
-        eprintln!("[11 output] wrote {} element(s) to {}", decisions.iter().filter(|d| d.keep).count(), path);
+        log_detail!("[11 output] wrote {} element(s) to {}", decisions.iter().filter(|d| d.keep).count(), path);
     }
 
     // ---- Output ----
@@ -1208,9 +1276,9 @@ where
                  tsd_len\ttsd_seq\ttsd_shift_l\ttsd_shift_r\tmotif\tmotif_class\tppt_purines15\tppt_offset\tpbs_offset\tn_count\txdrop_tsd_len\t\
                  int_tiles\tint_multi_frac\tint_gap_frac\tint_gap_bp\t\
                  dom_order\tdom_superfamily\tdom_strand\tdom_best_e\tdom_hits\tltr_dom_hits\tlltr_self_cov\trltr_self_cov\tkeep\tevidence\t\
-                 pbs_trna\tpbs_mm12\tpbs_edist18\tpbs_strand\ttsd_mm\tdom_pos\tdom_nest"
+                 pbs_trna\tpbs_mm12\tpbs_edist18\tpbs_strand\ttsd_mm\tdom_pos\tdom_nest\tstrand"
             );
-            for ((((((((c, ti), re), ist), dc), dec), &(sc_l, sc_r)), ldh), (pbs_hit, pbs_ed)) in surviving.iter().zip(reext.iter()).zip(internal_stats.iter()).zip(domain_calls.iter()).zip(decisions.iter()).zip(self_cov.iter()).zip(ltr_domain_hits.iter()).zip(pbs_calls.iter()) {
+            for (((((((((c, ti), re), ist), dc), dec), &(sc_l, sc_r)), ldh), (pbs_hit, pbs_ed)), strand) in surviving.iter().zip(reext.iter()).zip(internal_stats.iter()).zip(domain_calls.iter()).zip(decisions.iter()).zip(self_cov.iter()).zip(ltr_domain_hits.iter()).zip(pbs_calls.iter()).zip(strands.iter()) {
                 let seq_off = seq_starts.get(c.seq_num).copied().unwrap_or(0);
                 let seq_end = seq_last(c.seq_num);
                 let rel1 = |abs: usize| abs - seq_off + 1;
@@ -1256,7 +1324,7 @@ where
                     None => (".".into(), ".".into(), ".".into(), ".".into()),
                 };
                 println!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.2}\t{:.2}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     name, rel1(l1s), rel1(l2e), l2e - l1s + 1,
                     rel1(l1s), rel1(l1e), l1e - l1s + 1,
                     rel1(l2s), rel1(l2e), l2e - l2s + 1,
@@ -1269,12 +1337,26 @@ where
                     dord, dsf, dstr, dbe, dhits, if ldh.is_empty() { ".".to_string() } else { ldh.join(",") },
                     sc_l, sc_r,
                     dec.keep as u8, dec.why,
-                    pbs_trna, pbs_mm, pbs_ed, pbs_strand, tsd.mismatches, dpos, dnest,
+                    pbs_trna, pbs_mm, pbs_ed, pbs_strand, tsd.mismatches, dpos, dnest, strand,
                 );
             }
         }
     }
 
+    let kept = decisions.iter().filter(|d| d.keep).count();
+    let overlap = decisions.iter().filter(|d| d.why.ends_with(",overlap")).count();
+    log_user!("Results");
+    log_user!("  {} LTR retrotransposon element(s) kept of {} candidate(s)", log::n(kept), log::n(decisions.len()));
+    log_user!(
+        "  rejected: {} non-LTR protein hits, {} LTR self-repeat, {} domain inside an LTR, {} poly-A-tailed LTRs, \
+         {} overlapping a call with more evidence, {} too little evidence",
+        log::n(vetoed), log::n(tandem), log::n(coding), log::n(polya), log::n(overlap),
+        log::n(decisions.len() - kept - vetoed - tandem - coding - polya - overlap),
+    );
+    let mut outs = vec![match st.format { OutputFormat::Tsv => "candidate table on stdout".to_string(), OutputFormat::Gt => "LTRharvest table of the kept elements on stdout".to_string() }];
+    outs.extend([&args.library, &args.fastan_out, &args.trna_out].into_iter().flatten().cloned());
+    log_user!("  output: {}", outs.join(", "));
+    log_user!("done: {:.1} min", t_start.elapsed().as_secs_f64() / 60.0);
     Ok(())
 }
 
@@ -1400,7 +1482,7 @@ fn write_trna_library(
     }
     let mut top: Vec<(&str, [usize; 2])> = by_type.into_iter().collect();
     top.sort_by(|a, b| (b.1[0] + b.1[1]).cmp(&(a.1[0] + a.1[1])).then(a.0.cmp(b.0)));
-    eprintln!(
+    log_detail!(
         "[11 output] tRNA library: {} distinct gene sequence(s) from {} call(s) written to {} (calls in {}); top primers of kept elements: {}",
         lib.len(), flat.len(), path, tsv,
         top.iter().take(8).map(|(t, c)| format!("{} {} ({} exact)", t, c[0] + c[1], c[0])).collect::<Vec<_>>().join(", "),
@@ -1431,7 +1513,7 @@ fn trna_scan_fasta(path: &str, args: &Args) -> Result<()> {
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     write_trna_calls(&mut out, &names, &calls, None)?;
     std::io::Write::flush(&mut out)?;
-    eprintln!(
+    log_user!(
         "tRNA scan: {} sequence(s), {} bp, {} gene(s) in {:.1}s",
         seqs.len(), seqs.iter().map(|s| s.len()).sum::<usize>(), calls.iter().map(|c| c.len()).sum::<usize>(), t0.elapsed().as_secs_f64(),
     );
@@ -1440,8 +1522,15 @@ fn trna_scan_fasta(path: &str, args: &Args) -> Result<()> {
 
 // --------------------------------------------------
 fn main() -> Result<()> {
+    // --help-all: the help with the development and tuning options, which -h and --help leave out
+    if std::env::args().skip(1).any(|a| a == "--help-all") {
+        <Args as clap::CommandFactory>::command().mut_args(|a| a.hide(false)).print_long_help()?;
+        return Ok(());
+    }
     let matches = <Args as clap::CommandFactory>::command().get_matches();
     let args = <Args as clap::FromArgMatches>::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    log::init(args.verbose, args.log.as_deref())?;
+    log_user!("ltr-forage {}", std::env::args().skip(1).collect::<Vec<_>>().join(" "));
     if let Some(fasta) = &args.trna_scan {
         return trna_scan_fasta(fasta, &args);
     }

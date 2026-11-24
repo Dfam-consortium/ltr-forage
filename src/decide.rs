@@ -125,11 +125,13 @@ pub fn write_element<W: Write>(
     ltrs: (usize, usize, usize, usize),
     superfamily: &str,
     why: &str,
+    strand: &str,
 ) -> Result<()> {
     let (l1s, l1e, l2s, l2e) = ltrs;
     let rel1 = |abs: usize| abs - seq_off + 1;
+    // the records are the genome's plus strand; strand= is the element's coding strand (+, -, or ? unknown)
     let mut rec = |s: usize, e: usize, kind: &str| -> Result<()> {
-        writeln!(out, ">{}:{}..{}_{}#LTR/{} {}", seq_name, rel1(s), rel1(e), kind, superfamily, why)?;
+        writeln!(out, ">{}:{}..{}_{}#LTR/{} {} strand={}", seq_name, rel1(s), rel1(e), kind, superfamily, why, strand)?;
         out.write_all(&text[s..=e])?;
         writeln!(out)?;
         Ok(())
@@ -215,8 +217,8 @@ mod tests {
     fn fasta_records() {
         let text = b"NNAAAACCCCGGGGTTTTNN";
         let mut out = Vec::new();
-        write_element(&mut out, "s", text, 2, (2, 5, 14, 17), "unknown", "domain").unwrap();
+        write_element(&mut out, "s", text, 2, (2, 5, 14, 17), "unknown", "domain", "-").unwrap();
         let s = String::from_utf8(out).unwrap();
-        assert_eq!(s, ">s:1..4_LTR#LTR/unknown domain\nAAAA\n>s:5..12_INT#LTR/unknown domain\nCCCCGGGG\n>s:13..16_LTR#LTR/unknown domain\nTTTT\n");
+        assert_eq!(s, ">s:1..4_LTR#LTR/unknown domain strand=-\nAAAA\n>s:5..12_INT#LTR/unknown domain strand=-\nCCCCGGGG\n>s:13..16_LTR#LTR/unknown domain strand=-\nTTTT\n");
     }
 }
