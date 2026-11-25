@@ -8,11 +8,7 @@
 //! record, `name<TAB>d0,d1,...`.  This is the alignment-free alternative to
 //! RepeatMasking the genome with the library for depth cleanup (step 6).
 use anyhow::{Context, Result};
-use libsufr::{
-    sufr_file::SufrFile,
-    types::{CountOptions, FromUsize, Int},
-    util::read_text_length,
-};
+use libsufr::{OpenOptions, SourceKind, SuffixArray};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
@@ -35,10 +31,7 @@ fn read_fasta(path: &str) -> Result<Vec<(String, Vec<u8>)>> {
     Ok(out)
 }
 
-fn run<T>(sufr: &str, lib: &str, k: usize) -> Result<()>
-where
-    T: Int + FromUsize<T> + Sized + Send + Sync + serde::ser::Serialize,
-{
+fn run(sufr: &str, lib: &str, k: usize) -> Result<()> {
     let recs = read_fasta(lib)?;
     // canonical k-mer -> count (filled below)
     let mut uniq: HashMap<Vec<u8>, u32> = HashMap::new();
@@ -54,19 +47,17 @@ where
         }
     }
     eprintln!("{} records, {} distinct canonical {}-mers", recs.len(), uniq.len(), k);
-    let mut sf: SufrFile<T> = SufrFile::read(sufr, false)?;
+    let sf = SuffixArray::open_with(sufr, &OpenOptions::default().with_text(SourceKind::Memory).with_suffixes(SourceKind::Memory))?;
     let keys: Vec<Vec<u8>> = uniq.keys().cloned().collect();
     let t0 = std::time::Instant::now();
     for chunk in keys.chunks(2_000_000) {
         // each canonical k-mer and its reverse complement (the index holds one strand)
-        let mut q: Vec<String> = Vec::with_capacity(chunk.len() * 2);
+        let mut q: Vec<Vec<u8>> = Vec::with_capacity(chunk.len() * 2);
         for c in chunk {
-            q.push(String::from_utf8(c.clone())?);
-            q.push(String::from_utf8(rc(c))?);
+            q.push(c.clone());
+            q.push(rc(c));
         }
-        let res = sf.count(CountOptions { queries: q, max_query_len: None, low_memory: false })?;
-        let mut by_q: Vec<usize> = vec![0; chunk.len() * 2];
-        for r in res { by_q[r.query_num] = r.count; }
+        let by_q: Vec<usize> = sf.par_search_all(&q)?.iter().map(|h| h.count()).collect();
         for (i, c) in chunk.iter().enumerate() {
             let fwd = by_q[2 * i];
             let rev = if rc(c) == *c { 0 } else { by_q[2 * i + 1] };
@@ -111,5 +102,5 @@ fn main() -> Result<()> {
     if k == 0 {
         anyhow::bail!("k must be at least 1");
     }
-    if read_text_length(&a[1])? < u32::MAX as usize { run::<u32>(&a[1], &a[2], k) } else { run::<u64>(&a[1], &a[2], k) }
+    run(&a[1], &a[2], k)
 }

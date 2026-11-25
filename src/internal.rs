@@ -17,10 +17,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use libsufr::{
-    sufr_file::SufrFile,
-    types::{CountOptions, FromUsize, Int},
-};
+use libsufr::SuffixArray;
 
 pub const K: usize = 20;
 pub const STRIDE: usize = 10;
@@ -73,38 +70,21 @@ pub fn tiles(text: &[u8], start: usize, end: usize) -> Vec<Vec<u8>> {
 
 /// Count every distinct tile (and its reverse complement) once against the
 /// index.  Returns occurrences per tile, summed over both strands.
-pub fn count_tiles<T>(sf: &mut SufrFile<T>, regions: &[Vec<Vec<u8>>]) -> Result<HashMap<Vec<u8>, usize>>
-where
-    T: Int + FromUsize<T> + Sized + Send + Sync + serde::ser::Serialize,
-{
+pub fn count_tiles(sa: &SuffixArray, regions: &[Vec<Vec<u8>>]) -> Result<HashMap<Vec<u8>, usize>> {
     let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
-    let mut queries: Vec<String> = Vec::new();
+    let mut queries: Vec<Vec<u8>> = Vec::new();
     for r in regions {
         for t in r {
             for s in [t.clone(), revcomp(t)] {
                 if !index.contains_key(&s) {
                     index.insert(s.clone(), queries.len());
-                    queries.push(String::from_utf8_lossy(&s).into_owned());
+                    queries.push(s);
                 }
             }
         }
     }
-    let n_queries = queries.len();
-    let mut raw = vec![0usize; n_queries];
-    if n_queries > 0 {
-        // No max_query_len: asking for one that differs from the value the
-        // index was sorted with makes libsufr re-sort a copy of the suffix
-        // array through a temporary file.  With none, the array is loaded as
-        // built and each query is matched to its own length.
-        let results = sf.count(CountOptions {
-            queries,
-            max_query_len: None,
-            low_memory: false,
-        })?;
-        for r in results {
-            raw[r.query_num] = r.count;
-        }
-    }
+    // each query is matched over its whole length (the index is sorted on whole suffixes)
+    let raw: Vec<usize> = sa.par_search_all(&queries)?.iter().map(|h| h.count()).collect();
     Ok(both_strands(&index, &raw))
 }
 

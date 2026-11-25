@@ -9,10 +9,9 @@ name = "ltr-forage"
 path = "src/main.rs"
 
 [dependencies]
-libsufr = { git = "https://github.com/TravisWheelerLab/sufr.git", rev = "b4a924a" }   # 0.7.12 plus main's 7 commits (2025-04-03)
+libsufr = "0.8.0"
 rmblast-lib = { git = "https://github.com/Dfam-consortium/RMBlast.git", tag = "3.0.12" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 libc = "0.2"
 rayon = "1"
-serde = "1"

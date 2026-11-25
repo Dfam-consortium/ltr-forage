@@ -3,7 +3,7 @@
 # described in the README.  Every step is skipped when its output exists, so
 # the script can be re-run after a failure.
 #
-# Requires: gt (GenomeTools 1.6.2), sufr (0.7.12), samtools, python3,
+# Requires: gt (GenomeTools 1.6.2), sufr (>= 0.8.0), samtools, python3,
 # /usr/bin/time, and a RepeatMasker .out annotation of the same assembly
 # for the last two steps.
 set -euo pipefail
@@ -32,7 +32,7 @@ echo "== GenomeTools index (single-threaded)"
     -db "$GENOME" -indexname "${base}_esa" 2> "${base}_gt_index.time"
 
 echo "== sufr index (do not add --ignore-softmask: it turns lowercase into N)"
-[ -s "$base.sufr" ] || $TIME $SUFR create --dna "$GENOME" -o "$base.sufr" 2> "${base}_sufr_index.time"
+[ -s "$base.sufr" ] || $TIME $SUFR create -t "$THREADS" --dna --write-lcp -o "$base.sufr" "$GENOME" 2> "${base}_sufr_index.time"
 
 echo "== LTRharvest search (single-threaded; gt -j is slower and not deterministic)"
 [ -s "${base}_gt.out" ] || $TIME $GT ltrharvest -index "${base}_esa" $PARAMS_GT \

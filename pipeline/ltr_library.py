@@ -84,7 +84,7 @@ instead of ~109, gorilla 34.57 / 97.65 (HiRepEat 17.68 / 95.97).  Most of zebra 
 outside the curated library and much of it looks like real families HiRepEat also finds: FP rules need
 an artifact mechanism, not lower novelty.
 
-External programs: ltr-forage, sufr, rmblastn (Rust), te-composer (dfam-curator >= 0.6.6), and nail
+External programs: ltr-forage, sufr (>= 0.8.0), rmblastn (Rust), te-composer (dfam-curator >= 0.6.6), and nail
 (>= 0.7.1) with MMseqs2 for ltr-forage's domain search, found from the options, the environment (LTRFORAGE,
 SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy."""
 import argparse, concurrent.futures, glob, os, random, re, shutil, subprocess, sys, tempfile, time
@@ -137,7 +137,21 @@ def version_tuple(line):
     return tuple(map(int, m.groups())) if m else None
 
 
-def find_tool(opt, env, name, check=None, min_version=None, flag='--version'):
+def sufr_index_problem(path):
+    """Why the sufr index at path will not do for ltr-forage, from its header (None when it will): it must be
+    sufr 0.8.0's format (version 7) and have the LCP array (sufr create --write-lcp)."""
+    with open(path, 'rb') as fh:
+        head = fh.read(36)
+    if len(head) < 36:
+        return 'it is not a sufr index (too short)'
+    if head[0] != 7:
+        return f'it is a sufr index of format version {head[0]} (sufr 0.7 or older); ltr-forage reads sufr 0.8.0\'s'
+    if int.from_bytes(head[28:36], 'little') == 0:
+        return 'it has no LCP array (sufr create --write-lcp)'
+    return None
+
+
+def find_tool(opt, env, name, check=None, min_version=None, flag='--version', option=None):
     """First executable from the option, the environment variable, then PATH (no built-in install
     locations); with check, only one whose --help output contains that text (NCBI's rmblastn is often
     on PATH too, and only the Rust port takes the options used here); with min_version, only one at
@@ -155,7 +169,7 @@ def find_tool(opt, env, name, check=None, min_version=None, flag='--version'):
         return os.path.abspath(p)
     need = f' >= {".".join(map(str, min_version))}' if min_version else ''
     sys.exit(f'ltr_library: cannot find {name}{need}' + (f' ({check})' if check else '') +
-             (f'; too old: {", ".join(seen)}' if seen else '') + f'; give --{name.replace("_", "-")} or set {env}')
+             (f'; too old: {", ".join(seen)}' if seen else '') + f'; give --{option or name.replace("_", "-")} or set {env}')
 
 
 def read_fasta(path):
@@ -222,8 +236,7 @@ class Run:
         os.makedirs(os.path.join(self.out, 'elem'), exist_ok=True)
         os.makedirs(os.path.join(self.out, '.done'), exist_ok=True)
         # temporary files of every step go under the outdir, not the system /tmp, unless --tmpdir names another
-        # place: sufr's index partitions need up to the index's size (C. elegans peak 0.58 GB, index 0.90 GB), sufr
-        # does not check its writes, and a full /tmp gives a corrupt index without an error
+        # place (the domain search's scratch is about 2 GB for a primate genome)
         self.tmp = os.path.abspath(a.tmpdir) if a.tmpdir else os.path.join(self.out, 'tmp')
         os.makedirs(self.tmp, exist_ok=True)
         os.environ['TMPDIR'] = self.tmp; tempfile.tempdir = self.tmp
@@ -340,7 +353,8 @@ class Run:
 
     # ---- steps -----------------------------------------------------------
     def index(self):
-        self.sh([self.a.sufr, '-t', self.a.threads, 'create', '--dna', '-o', self.path('genome.sufr'), self.genome], 'index.log')
+        self.sh([self.a.sufr, 'create', '-t', self.a.threads, '--dna', '--write-lcp', '-o', self.path('genome.sufr'), self.genome],
+                'index.log')
 
     def sample(self):
         a = self.a
@@ -850,9 +864,8 @@ def main():
     ap.add_argument('-v', '--verbose', action='store_true', help='print every step and its results (run.log always has them)')
     ap.add_argument('--keep-work', action='store_true', help='keep the intermediate files (<outdir>/work: the steps\' files, '
                     'their logs, the sufr index the run built); a successful run otherwise removes them, and with them --from')
-    ap.add_argument('--tmpdir', help='directory for temporary files of all steps (default: <outdir>/work/tmp; '
-                    'the sufr index step needs up to the size of the finished index there, ~9 bytes per genome base)')
-    ap.add_argument('--sufr', dest='sufr_index', metavar='INDEX', help='existing sufr index of the genome (skips step 1; default: '
+    ap.add_argument('--tmpdir', help='directory for temporary files of all steps (default: <outdir>/work/tmp)')
+    ap.add_argument('--sufr', dest='sufr_index', metavar='INDEX', help='existing sufr 0.8.0 index of the genome, made with sufr create --dna --write-lcp (skips step 1; default: '
                     '<genome>.sufr beside the genome when it exists, with .fa/.fasta/.fna dropped)')
     ap.add_argument('--from', dest='from_step', choices=STEPS, metavar='STEP', help='rerun from this step on (needs the intermediate '
                     'files: a run with --keep-work, or one that stopped; --help-all lists the steps)')
@@ -871,7 +884,7 @@ def main():
     e.add_argument('--evidence-reference', metavar='LIB', help='curated library to measure each family against on the page')
     t = ap.add_argument_group('programs and data (when not found in the environment or on PATH)')
     t.add_argument('--ltr-forage', dest='ltr_forage', metavar='PATH', help='ltr-forage binary ($LTRFORAGE)')
-    t.add_argument('--sufr-bin', dest='sufr', metavar='PATH', help='sufr binary ($SUFR), for building the index')
+    t.add_argument('--sufr-bin', dest='sufr', metavar='PATH', help='sufr >= 0.8.0 ($SUFR), for building the index')
     t.add_argument('--rmblastn', metavar='PATH', help='rmblastn, the Rust port >= 3.0.9 ($RMBLASTN)')
     t.add_argument('--te-composer', dest='te_composer', metavar='PATH', help='te-composer >= 0.6.6 ($TE_COMPOSER)')
     t.add_argument('--nail', metavar='PATH', help='nail >= 0.7.1 ($NAIL)')
@@ -946,8 +959,15 @@ def main():
     if not a.sufr_index:
         idx = re.sub(r'\.(fa|fasta|fna)$', '', a.genome) + '.sufr'
         if os.path.isfile(idx):
-            if os.path.getmtime(idx) >= os.path.getmtime(a.genome): a.sufr_index = idx
+            why = sufr_index_problem(idx)
+            if why: print(f'ltr_library: not using {idx}: {why}; building a new index', file=sys.stderr)
+            elif os.path.getmtime(idx) >= os.path.getmtime(a.genome): a.sufr_index = idx
             else: print(f'ltr_library: not using {idx}: it is older than the genome (--sufr {idx} to use it anyway)', file=sys.stderr)
+    elif not os.path.isfile(a.sufr_index):
+        sys.exit(f'ltr_library: --sufr {a.sufr_index}: no such file')
+    elif sufr_index_problem(a.sufr_index):
+        sys.exit(f'ltr_library: --sufr {a.sufr_index}: {sufr_index_problem(a.sufr_index)}; rebuild it with '
+                 f'sufr create --dna --write-lcp, or leave out --sufr and the run builds one')
     a.ltr_forage = find_tool(a.ltr_forage, 'LTRFORAGE', 'ltr-forage')
     a.rmblastn = find_tool(a.rmblastn, 'RMBLASTN', 'rmblastn', check='Rust port', min_version=(3, 0, 9), flag='-version')
     a.nail = find_tool(a.nail, 'NAIL', 'nail', min_version=(0, 7, 1))
@@ -959,7 +979,7 @@ def main():
     # consensus models (step 22) and the seed alignments (step 23b)
     a.te_composer = find_tool(a.te_composer, 'TE_COMPOSER', 'te-composer', min_version=(0, 6, 6))
     if not a.sufr_index:
-        a.sufr = find_tool(a.sufr, 'SUFR', 'sufr')
+        a.sufr = find_tool(a.sufr, 'SUFR', 'sufr', min_version=(0, 8, 0), option='sufr-bin')
     if not os.path.isfile(a.domain_hmm):
         sys.exit(f'ltr_library: domain HMM file not found: {a.domain_hmm} (give --domain-hmm)')
     a.domain_hmm = os.path.abspath(a.domain_hmm)   # the steps run in the output directory

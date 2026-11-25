@@ -1,84 +1,73 @@
-/// Sequential, buffered reading of the suffix array and LCP array straight
-/// from a `.sufr` file.
+/// Sequential, buffered reading of the suffix array and LCP array of a
+/// `.sufr` file through libsufr's range reads.
 ///
 /// The bottom-up traversal in `maxpairs.rs` consumes both arrays once, in
-/// order, so there is no reason to hold them in memory: on hg38 that was two
-/// `Vec<usize>` of 24 GB each.  `ArrayReader` reads a few megabytes at a
-/// time and yields each element as a `usize`.
+/// order, so there is no reason to hold them in memory: on hg38 they are
+/// 24 GB each.  The index is opened with the arrays on disk, and
+/// `ArrayReader` reads 262,144 values at a time (positioned reads, so the
+/// workers of the parallel traversal share one opened index).
 
-use anyhow::{bail, Result};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use anyhow::{Context, Result};
+use libsufr::SuffixArray;
 
-/// Elements per read.  At 4 or 8 bytes each this is a 4-8 MB buffer.
-const CHUNK_ELEMS: usize = 1 << 20;
+/// Values per read: a 1-2 MB read from the file into a 2 MB buffer, per reader (two per worker).
+const CHUNK_ELEMS: usize = 1 << 18;
 
-pub struct ArrayReader {
-    file: File,
-    /// Bytes per element: 4 for a u32 index, 8 for u64.
-    width: usize,
-    remaining: usize,
-    buf: Vec<u8>,
-    pos: usize,
-    filled: usize,
+#[derive(Clone, Copy, Debug)]
+pub enum Array {
+    Suffixes,
+    Lcps,
 }
 
-impl ArrayReader {
-    /// Open `path` and position at `byte_offset`, ready to yield
-    /// `num_elements` integers of `width` bytes each (native byte order,
-    /// as written by sufr).
-    pub fn open(path: &str, byte_offset: u64, num_elements: usize, width: usize) -> Result<Self> {
-        if width != 4 && width != 8 {
-            bail!("unsupported element width {width}");
-        }
-        let mut file = File::open(path)?;
-        // a truncated index is an error here rather than a panic in a worker's read
-        let (have, need) = (file.metadata()?.len(), byte_offset + (num_elements * width) as u64);
-        if have < need {
-            bail!("{path} is truncated: {have} bytes, but its header places array data up to byte {need}");
-        }
-        file.seek(SeekFrom::Start(byte_offset))?;
-        Ok(ArrayReader {
-            file,
-            width,
-            remaining: num_elements,
-            buf: vec![0; CHUNK_ELEMS * width],
-            pos: 0,
-            filled: 0,
-        })
+fn read(sa: &SuffixArray, which: Array, ranks: std::ops::Range<usize>) -> Result<Vec<usize>> {
+    match which {
+        Array::Suffixes => sa.suffixes(ranks.clone()),
+        Array::Lcps => sa.lcps(ranks.clone()),
+    }
+    .with_context(|| format!("reading the index's {:?} at ranks {:?}", which, ranks))
+}
+
+pub struct ArrayReader<'a> {
+    sa: &'a SuffixArray,
+    which: Array,
+    /// The next rank to read from the file, and the end of the range.
+    next: usize,
+    end: usize,
+    buf: Vec<usize>,
+    pos: usize,
+}
+
+impl<'a> ArrayReader<'a> {
+    /// Yield the values of `which` at ranks `start..end`.
+    pub fn new(sa: &'a SuffixArray, which: Array, start: usize, end: usize) -> Self {
+        ArrayReader { sa, which, next: start, end, buf: Vec::new(), pos: 0 }
     }
 
     fn refill(&mut self) -> bool {
-        if self.remaining == 0 {
+        if self.next >= self.end {
             return false;
         }
-        let n = self.remaining.min(CHUNK_ELEMS);
-        let bytes = n * self.width;
-        self.file
-            .read_exact(&mut self.buf[..bytes])
-            .expect("read error in the .sufr file (its length was checked when it was opened)");
-        self.remaining -= n;
+        let to = (self.next + CHUNK_ELEMS).min(self.end);
+        // libsufr checked the file's length against its header when it opened it, so a failed read
+        // here is an I/O error, which the traversal has no way to recover from
+        self.buf = read(self.sa, self.which, self.next..to).unwrap_or_else(|e| panic!("{:#}", e));
+        self.next = to;
         self.pos = 0;
-        self.filled = bytes;
         true
     }
 }
 
-impl Iterator for ArrayReader {
+impl Iterator for ArrayReader<'_> {
     type Item = usize;
 
     #[inline]
     fn next(&mut self) -> Option<usize> {
-        if self.pos == self.filled && !self.refill() {
+        if self.pos == self.buf.len() && !self.refill() {
             return None;
         }
-        let b = &self.buf[self.pos..self.pos + self.width];
-        self.pos += self.width;
-        Some(if self.width == 4 {
-            u32::from_ne_bytes([b[0], b[1], b[2], b[3]]) as usize
-        } else {
-            u64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize
-        })
+        let v = self.buf[self.pos];
+        self.pos += 1;
+        Some(v)
     }
 }
 
@@ -97,14 +86,9 @@ impl Iterator for ArrayReader {
 /// position at or after `k * num_suffixes / n_pieces`, so a long run of
 /// `lcp >= min_len` (a large repeat family) stays in one piece and the
 /// actual count may be smaller.  Returns half-open `(start, end)` ranges.
-pub fn split_points(
-    path: &str,
-    lcp_pos: u64,
-    num_suffixes: usize,
-    width: usize,
-    min_len: usize,
-    n_pieces: usize,
-) -> Result<Vec<(usize, usize)>> {
+pub fn split_points(sa: &SuffixArray, num_suffixes: usize, min_len: usize, n_pieces: usize) -> Result<Vec<(usize, usize)>> {
+    // the qualifying position is usually within a few values of the target: read small blocks
+    const BLOCK: usize = 4096;
     let mut cuts = vec![0usize];
     for k in 1..n_pieces.max(1) {
         let target = k * num_suffixes / n_pieces;
@@ -112,18 +96,15 @@ pub fn split_points(
         if target <= last {
             continue;
         }
-        let mut rd = ArrayReader::open(
-            path,
-            lcp_pos + (target * width) as u64,
-            num_suffixes - target,
-            width,
-        )?;
         let mut i = target;
-        while let Some(v) = rd.next() {
-            if v < min_len {
-                break;
+        'scan: while i < num_suffixes {
+            let to = (i + BLOCK).min(num_suffixes);
+            for v in read(sa, Array::Lcps, i..to)? {
+                if v < min_len {
+                    break 'scan;
+                }
+                i += 1;
             }
-            i += 1;
         }
         if i < num_suffixes && i > last {
             cuts.push(i);

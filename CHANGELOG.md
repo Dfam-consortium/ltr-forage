@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## Unreleased
+### Changed
+- sufr 0.8.0: ltr-forage reads its index format (version 7) through libsufr
+  0.8.0's API, and no longer reads indexes made by sufr 0.7 or older; rebuild
+  them with `sufr create --dna --write-lcp` (ltr-forage reads the LCP array,
+  which sufr 0.8.0 writes only when asked).  ltr-forage and `ltr_library.py`
+  say so when given an old index or one without the LCP array, and the driver
+  builds its index that way, with sufr 0.8.0 or newer.  The results are
+  unchanged: on the Arabidopsis example every output is byte-identical, and on
+  rice and hg38 LTRharvest mode's output too.
+
 ### Fixed
 - The evidence page named the run after the driver's work directory ("work")
   instead of the output directory.

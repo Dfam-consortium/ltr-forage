@@ -11,7 +11,7 @@ section.  In short:
 
 ```bash
 gzip -dc examples/ath_chr4.fa.gz > ath_chr4.fa
-sufr create --dna -o ath_chr4.sufr ath_chr4.fa
+sufr create -t 8 --dna --write-lcp -o ath_chr4.sufr ath_chr4.fa
 ltr-forage ath_chr4.sufr -t 8 --library elements.fa --fastan-out tandem.bed --log ltr-forage.log > cand.tsv
 pipeline/ltr_library.py ath_chr4.fa -o out -t 8 --evidence-page
 ```

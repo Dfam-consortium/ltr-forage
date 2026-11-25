@@ -1,10 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use libsufr::{
-    sufr_file::SufrFile,
-    types::{FromUsize, Int},
-    util::read_text_length,
-};
+use libsufr::{OpenOptions, SoftMask, SourceKind, SuffixArray};
 use rayon::prelude::*;
 
 #[macro_use]
@@ -42,7 +38,7 @@ enum OutputFormat {
     allow_negative_numbers = true,
 )]
 struct Args {
-    /// Path to a .sufr index file (created with `sufr create --dna`)
+    /// Path to a .sufr index file (sufr 0.8.0: `sufr create --dna --write-lcp`)
     #[arg(required_unless_present = "trna_scan")]
     sufr: Option<String>,
 
@@ -458,6 +454,7 @@ fn setup(args: &Args, given: &dyn Fn(&str) -> bool) -> Result<Setup> {
     }
     if let Some(p) = &args.sufr {
         if !std::path::Path::new(p).is_file() { bad.push(format!("index not found: {}", p)); }
+        else if let Some(e) = index_problem(p, args.ltrharvest) { bad.push(e); }
     }
     let mut nail = None;
     // --fastan-only stops before the domain search and needs none of its programs
@@ -607,11 +604,29 @@ fn set_threads(n: usize) {
     }
 }
 
+/// What makes the index at `path` unusable, read from its header: a file from an older sufr, one
+/// without the LCP array the seed search reads, or one whose text kept lowercase bases.
+fn index_problem(path: &str, ltrharvest: bool) -> Option<String> {
+    let rebuild = format!("rebuild it with sufr 0.8.0: sufr create --dna --write-lcp -o {} genome.fa", path);
+    let sa = match SuffixArray::open(path) {
+        Ok(sa) => sa,
+        Err(libsufr::OpenError::Version { found, .. }) =>
+            return Some(format!("{} is a sufr index of format version {} (sufr 0.7 or older); {}", path, found, rebuild)),
+        Err(e) => return Some(format!("cannot open the index {}: {}", path, e)),
+    };
+    let h = sa.header();
+    if !h.has_lcp() {
+        return Some(format!("{} has no LCP array, which the seed search reads; {}", path, rebuild));
+    }
+    // Lowercase bases would not match their uppercase copies.  LTRharvest mode reads what it is given.
+    if h.soft_mask == SoftMask::Preserve && !ltrharvest {
+        return Some(format!("{} keeps the genome's lowercase bases (sufr create --soft-mask preserve); {}", path, rebuild));
+    }
+    None
+}
+
 // --------------------------------------------------
-fn run<T>(args: &Args, st: &Setup) -> Result<()>
-where
-    T: Int + FromUsize<T> + Sized + Send + Sync + serde::ser::Serialize,
-{
+fn run(args: &Args, st: &Setup) -> Result<()> {
     if args.threads > 0 {
         set_threads(args.threads);
     }
@@ -622,34 +637,39 @@ where
     let t_start = std::time::Instant::now();
     log_user!("{}", if args.ltrharvest { "Index (stage 1)" } else { "Index and Tandem-Array Mask (stages 1-2)" });
     let sufr = args.sufr.as_deref().context("a SUFR index is required")?;
-    let mut sf: SufrFile<T> = SufrFile::read(sufr, false)?;
+    // The text in memory (it is read at random throughout); the suffix and LCP arrays stay on disk and
+    // are read once, in order, by the seed search.  --internal-stats searches the index for every tile,
+    // so it holds the suffix array in memory too.
+    let suffixes_in = if args.internal_stats { SourceKind::Memory } else { SourceKind::Disk };
+    let sf = SuffixArray::open_with(sufr, &OpenOptions::default().with_text(SourceKind::Memory).with_suffixes(suffixes_in))
+        .with_context(|| format!("opening the index {}", sufr))?;
+    let header = sf.header();
 
     // sufr stores whole FASTA header lines; output names are the first word
-    let seq_names: Vec<String> = sf
+    let seq_names: Vec<String> = header
         .sequence_names
         .iter()
         .map(|n| n.split_whitespace().next().unwrap_or("").to_string())
         .collect();
-    let text: &[u8] = &sf.text;
-    let num_suffixes = sf.len_suffixes.to_usize();
-    let seq_starts: Vec<usize> = sf.sequence_starts.iter().map(|v| v.to_usize()).collect();
+    let text_cow = sf.text(0..header.text_len)?;
+    let text: &[u8] = &text_cow;
+    let num_suffixes = header.num_suffixes;
+    let num_sequences = header.sequence_starts.len();
+    let seq_starts: Vec<usize> = header.sequence_starts.clone();
     // Text position of the last base of sequence k.  Every sequence is followed by one byte that is
     // not a base (the separator, or sufr's terminator after the last one), so this is two before the
     // next sequence's start, or the text's length.
     let text_len = text.len();
     let seq_last = |k: usize| seq_starts.get(k + 1).copied().unwrap_or(text_len).saturating_sub(2);
-    let width = std::mem::size_of::<T>();
-    let sa_pos = sf.suffix_array_pos as u64;
-    let lcp_pos = sf.lcp_pos as u64;
 
     log_detail!(
         "[1 index] {} sequence(s), {} suffixes, text length {}; text loaded in {}",
-        sf.num_sequences.to_usize(),
+        num_sequences,
         num_suffixes,
-        sf.text_len.to_usize(),
+        text_len,
         el(&t_start),
     );
-    log_user!("  {} sequence(s), {:.1} Mb", log::n(sf.num_sequences.to_usize()), sf.text_len.to_usize() as f64 / 1e6);
+    log_user!("  {} sequence(s), {:.1} Mb", log::n(num_sequences), text_len as f64 / 1e6);
     log_detail!(
         "[1 index] {}parameters: min_seed={} ltr=[{},{}] dist=[{},{}] similar={:.0}% xdrop={}",
         if args.ltrharvest { "LTRharvest mode; " } else { "" },
@@ -711,13 +731,13 @@ where
     let wild = maxpairs::WildRuns::new(text);
     let mask = maxpairs::WildRuns::masked(&extra);
     let n_pieces = rayon::current_num_threads() * 4;
-    let pieces = stream::split_points(sufr, lcp_pos, num_suffixes, width, args.min_seed, n_pieces)?;
+    let pieces = stream::split_points(&sf, num_suffixes, args.min_seed, n_pieces)?;
     let per_piece: Vec<Result<Vec<ltr::Seed>>> = pieces
         .par_iter()
         .map(|&(start, end)| {
             let n = end - start;
-            let sa = stream::ArrayReader::open(sufr, sa_pos + (start * width) as u64, n, width)?;
-            let lcp = stream::ArrayReader::open(sufr, lcp_pos + (start * width) as u64, n, width)?;
+            let sa = stream::ArrayReader::new(&sf, stream::Array::Suffixes, start, end);
+            let lcp = stream::ArrayReader::new(&sf, stream::Array::Lcps, start, end);
             let mut seeds: Vec<ltr::Seed> = Vec::new();
             maxpairs::enumerate_maximal_repeats(
                 sa,
@@ -1006,7 +1026,7 @@ where
             .map(|&(_, l1e, l2s, _)| if l2s > l1e + 1 { internal::tiles(text, l1e + 1, l2s - 1) } else { Vec::new() })
             .collect();
         let n_tiles: usize = regions.iter().map(|r| r.len()).sum();
-        let counts = internal::count_tiles(&mut sf, &regions)?;
+        let counts = internal::count_tiles(&sf, &regions)?;
         log_detail!(
             "[7b internal 20-mers] counted {} tile(s), {} distinct k-mer(s) with reverse complements ({} elapsed)",
             n_tiles, counts.len(), el(&t_start),
@@ -1015,7 +1035,6 @@ where
     } else {
         vec![None; surviving.len()]
     };
-    let text: &[u8] = &sf.text;
 
     log_user!("Evidence (stage 8)");
     // ---- 8a: LTR self-alignment (tandem-repeat check) ----
@@ -1536,10 +1555,5 @@ fn main() -> Result<()> {
     }
     let given = |id: &str| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine);
     let st = setup(&args, &given)?;
-    let text_len = read_text_length(args.sufr.as_deref().context("a SUFR index is required")?)?;
-    if text_len < u32::MAX as usize {
-        run::<u32>(&args, &st)
-    } else {
-        run::<u64>(&args, &st)
-    }
+    run(&args, &st)
 }

@@ -83,7 +83,7 @@ PREFIX itself (/usr/local by default).
 
 ## Dependencies pinned for the build
 
-libsufr is a git dependency pinned to a commit of TravisWheelerLab/sufr (Cargo.toml), and rmblast-lib to a
-tag of Dfam-consortium/RMBlast.  sufr 0.8.0 changes its library API and index format (version 7); moving to it
-needs ltr-forage's index reading ported (src/main.rs, src/internal.rs, src/stream.rs, src/bin/kmer_depth.rs),
-`--write-lcp` added to the driver's `sufr create`, and every index rebuilt.
+libsufr comes from crates.io (0.8.0, Cargo.toml), and rmblast-lib is a git dependency pinned to a tag of
+Dfam-consortium/RMBlast.  A libsufr whose index format changes (sufr 0.8.0 wrote version 7) makes every
+existing index unreadable: say so in the CHANGELOG, and update the version check in pipeline/ltr_library.py
+(sufr_index_problem) and the minimum sufr version it asks for.

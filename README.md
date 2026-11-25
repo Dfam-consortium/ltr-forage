@@ -71,9 +71,9 @@ relative to itself.  The programs below are not included.
 
 For `ltr-forage`:
 
-- `sufr` 0.7.12, to build the `.sufr` index
+- `sufr` ≥ 0.8.0, to build the `.sufr` index
   ([TravisWheelerLab/sufr](https://github.com/TravisWheelerLab/sufr)).
-  sufr 0.8.0 writes a new index format that this release cannot read.
+  Indexes made by sufr 0.7 or older cannot be read: rebuild them.
 - `nail` ≥ 0.7.1 ([TravisWheelerLab/nail](https://github.com/TravisWheelerLab/nail))
   and MMseqs2 (`mmseqs`), for the protein-domain search; not needed with
   `--no-domains` or `--ltrharvest`.  The profiles ship in `data/TEdomains.hmm`.
@@ -99,8 +99,8 @@ make                               # the binary is target/release/ltr-forage
 make install PREFIX=$HOME/opt      # optional: the release layout in $HOME/opt/ltr-forage-<version>/
 ```
 
-The build fetches libsufr and rmblast-lib from GitHub, at the versions pinned
-in `Cargo.toml`.  `ltr-forage --version` names the commit the binary was built
+The build fetches libsufr from crates.io and rmblast-lib from GitHub, at the
+versions pinned in `Cargo.toml`.  `ltr-forage --version` names the commit the binary was built
 from, with `-dirty` when the source had uncommitted changes.
 
 ### Finding the programs
@@ -136,12 +136,12 @@ With the programs installed and findable (to try a small genome first, see the
 **1. Index the genome, once.**
 
 ```bash
-sufr create --dna -o genome.sufr genome.fa
+sufr create -t 24 --dna --write-lcp -o genome.sufr genome.fa
 ```
 
-sufr needs scratch space in `$TMPDIR` (`/tmp` when unset) up to the size of the
-finished index, about 9 bytes per genome base.  Do not pass `--ignore-softmask`
-on a soft-masked assembly: it turns lowercase bases into N rather than
+ltr-forage reads the LCP array, which sufr writes only with `--write-lcp`.  The
+index takes about 9 bytes per genome base.  Do not pass `--ignore-softmask` on
+a soft-masked assembly: it turns lowercase bases into N rather than
 uppercasing them, which removes the repeats you are looking for.
 
 **2. Find the copies.**
@@ -179,7 +179,7 @@ threads.  Run it in an empty directory (from a source checkout, use
 
 ```bash
 gzip -dc /path/to/ltr-forage/examples/ath_chr4.fa.gz > ath_chr4.fa
-sufr create --dna -o ath_chr4.sufr ath_chr4.fa                  # 2 s, 167 MB
+sufr create -t 8 --dna --write-lcp -o ath_chr4.sufr ath_chr4.fa      # 1 s, 167 MB
 ```
 
 **Copies only.**  ltr-forage writes the candidate table, the kept elements and
@@ -310,7 +310,7 @@ ltr-forage hg38.sufr --ltrharvest \
 | `-t`, `--threads N` | all CPUs | Threads |
 | `--evidence-page` | | Also write `evidence.html` |
 | `--evidence-reference LIB` | | A curated library to measure each family against on the page |
-| `--sufr INDEX` | `<genome>.sufr` when it exists | An existing index (otherwise the driver builds one in its work directory) |
+| `--sufr INDEX` | `<genome>.sufr` when it exists | An existing index, made with `--write-lcp` (otherwise the driver builds one in its work directory) |
 | `--tier LEVEL` | `pbs` | Single-copy families kept: LTR identity ≥ 93% or a PBS (`pbs`), identity ≥ 90% and a PBS (`strict`), or all (`all`) |
 | `--mask-bed BED` | | Regions to leave out of the search |
 | `--mask-warn PCT` | 2.0 | Warn about any record estimated to mask at least PCT% of the genome |
@@ -544,8 +544,6 @@ Comparisons from the development of the driver are in
   precision, are to come.
 - **A general "is this model an LTR element" test** to replace the stack of
   rules.
-- **sufr 0.8.0** changes the index format; supporting it needs ltr-forage's
-  index reading ported.
 
 
 ## Differences from GenomeTools LTRharvest
@@ -592,7 +590,7 @@ on the thread count.
 The hg38 numbers in this README come from one comparison (455 sequences,
 3.2 Gb, all uppercase).  `eval/run_hg38_comparison.sh` runs the steps below in
 order, skipping any whose output exists; its scripts need only Python 3.  It
-needs GenomeTools 1.6.2 (`gt`), sufr 0.7.12, `samtools`, and, for the last two
+needs GenomeTools 1.6.2 (`gt`), sufr ≥ 0.8.0, `samtools`, and, for the last two
 steps, a RepeatMasker annotation of the same assembly.
 
 ### Indexes and searches
@@ -600,7 +598,7 @@ steps, a RepeatMasker annotation of the same assembly.
 ```bash
 samtools faidx hg38.fa
 gt suffixerator -dna -pl -tis -suf -lcp -sds -des -db hg38.fa -indexname hg38_esa
-sufr create --dna hg38.fa -o hg38.sufr
+sufr create -t 16 --dna --write-lcp -o hg38.sufr hg38.fa
 
 gt ltrharvest -index hg38_esa -seed 30 -minlenltr 100 -maxlenltr 1000 \
     -mindistltr 1000 -maxdistltr 15000 -similar 85 -xdrop 5 \
@@ -614,8 +612,8 @@ Both indexes come from the same FASTA, so the 0-based sequence numbers of the
 two outputs refer to the same sequences.  LTRharvest was run on one thread:
 its `-j` option ran slower on chr22 at 16 and 32 jobs and changed seven of 783
 predictions.  It took about an hour to search hg38, after a two-hour index
-build.  ltr-forage, on 16 threads of a busy shared machine, took 3.1 min and
-4.4 GB.
+build.  On 16 threads of a busy shared machine, sufr 0.8.0 built its index in
+3.2 min (8.1 GB) and ltr-forage searched it in 3.4 min (4.3 GB).
 
 ### Comparing the predictions
 
