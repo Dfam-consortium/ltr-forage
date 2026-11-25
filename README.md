@@ -25,25 +25,8 @@ appear in only one output (see
 `ltr-forage` holds neither the suffix array nor the LCP array in memory.  It
 streams both from the file during the seed search, reading each once, in
 order, so peak memory scales with the genome rather than with the index:
-searching the 3.2 Gb hg38 genome needs about 4.5 GB.
-
-The seed search and the per-candidate steps run in parallel with
-[Rayon](https://github.com/rayon-rs/rayon).  Seed extension is easy to
-parallelise because each seed is independent.  Seed enumeration is a bottom-up
-suffix-tree traversal that LTRharvest runs on one core; ltr-forage cuts the
-suffix array at positions whose LCP value falls below the seed length, which no
-repeat of at least that length can span, and traverses the resulting pieces
-independently.  LTRharvest's search of hg38 takes about two minutes on 16
-cores, against 56 minutes for single-threaded LTRharvest.  Indexing is a
-separate one-time step.
-
-Results do not depend on how many threads ran.  Where the surviving
-candidate would otherwise follow the order in which seeds arrived,
-`ltr-forage` breaks the tie on the seed's enumeration index, so every thread
-count yields byte-identical output.  LTRharvest's own `-j` mode gives
-different results at different job counts: on human chromosome 22 it returns
-different boundaries for seven of its 783 predictions at 32 jobs, and takes
-nearly four times as long as it does on one.
+searching the 3.2 Gb hg38 genome needs about 4.5 GB.  Seed search and the per-candidate
+steps run in parallel.
 
 `pipeline/ltr_library.py` builds on the kept elements to produce an LTR
 family library from a genome assembly: one LTR and one internal model per
