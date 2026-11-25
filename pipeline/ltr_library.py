@@ -834,8 +834,7 @@ and the programs and versions used).
 Programs: ltr-forage, sufr, rmblastn (Rust port), te-composer, nail and MMseqs2, from the options above, the
 environment (LTRFORAGE, SUFR, RMBLASTN, TE_COMPOSER, NAIL, MMSEQS) or PATH; Python 3 with numpy.
 
---help-all also lists the development and tuning options and every step; README.md, "Building a family
-library", describes them."""
+--help-all also lists the development and tuning options and every step."""
 
 
 def main():

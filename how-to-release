@@ -17,7 +17,7 @@ The archive has the layout `make install` produces locally:
     ltr-forage-<version>/pipeline/                 the driver, its step scripts, the evidence-page template
     ltr-forage-<version>/data/                     TEdomains.hmm, TEfam.hmm, domains/, matrices/
     ltr-forage-<version>/examples/                 ath_chr4.fa.gz and its README
-    ltr-forage-<version>/docs/pipeline_figure.svg
+    ltr-forage-<version>/docs/pipeline_figure.svg, evidence_example.png, accuracy-history.md
     ltr-forage-<version>/README.md, CHANGELOG.md, LICENSE
 
 ltr-forage finds data/TEdomains.hmm relative to itself, and the driver finds pipeline/ and data/ relative to

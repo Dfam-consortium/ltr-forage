@@ -3,6 +3,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased
+### Fixed
+- The evidence page named the run after the driver's work directory ("work")
+  instead of the output directory.
+- No step script falls back to a built-in program or data path any more
+  (`rmb_ava.sh`, `clean_library_rmb.sh`, `evidence_page.py`).
+
+### Documentation
+- README reorganised and shortened: option tables in place of the full help,
+  one output section, an example evidence-page dossier
+  (`docs/evidence_example.png`, made by `docs/evidence_figure.py`); the
+  algorithm notes left it.  The hg38 comparison with LTRharvest was rerun
+  with this code: the same counts.
+
 ## 0.1.0 - 11/23/26
 The first release: `ltr-forage`, which finds LTR retrotransposon copies in a
 genome from a sufr suffix-array index, and `pipeline/ltr_library.py`, which

@@ -7,7 +7,7 @@
 #   $(PREFIX)/$(NAME)-$(VERSION)/pipeline/*              the library driver and its step scripts
 #   $(PREFIX)/$(NAME)-$(VERSION)/data/*                  protein profiles, scoring matrices
 #   $(PREFIX)/$(NAME)-$(VERSION)/examples/*              Arabidopsis chromosome 4, the README's example
-#   $(PREFIX)/$(NAME)-$(VERSION)/{README.md,CHANGELOG.md,LICENSE,docs/pipeline_figure.svg}
+#   $(PREFIX)/$(NAME)-$(VERSION)/{README.md,CHANGELOG.md,LICENSE,docs/pipeline_figure.svg,docs/evidence_example.png,docs/accuracy-history.md}
 #
 # ltr-forage finds data/TEdomains.hmm relative to itself (../data beside bin/), and the driver finds its step
 # scripts and data/ relative to pipeline/, so the tree can be moved and nothing needs editing after unpacking.
@@ -68,7 +68,7 @@ install: build
 	$(INSTALL) -m 0644 $(DOMAINS) $(PKGDIR)/data/domains/
 	$(INSTALL) -m 0644 $(MATRICES) $(PKGDIR)/data/matrices/
 	$(INSTALL) -m 0644 $(EXAMPLES) $(PKGDIR)/examples/
-	$(INSTALL) -m 0644 docs/pipeline_figure.svg $(PKGDIR)/docs/
+	$(INSTALL) -m 0644 docs/pipeline_figure.svg docs/evidence_example.png docs/accuracy-history.md $(PKGDIR)/docs/
 	$(INSTALL) -m 0644 $(DOCS) $(PKGDIR)/
 	@echo "Installed $(NAME) $(VERSION) -> $(PKGDIR)"
 	@echo "  $$($(PKGDIR)/bin/$(BIN) --version)"
