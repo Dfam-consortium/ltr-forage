@@ -685,7 +685,7 @@ Willhoeft 2008), part of GenomeTools (Gremme, Steinbiss and Kurtz 2013),
 written with Claude (Anthropic's AI model).
 
 The suffix-array index is [sufr](https://github.com/TravisWheelerLab/sufr), by
-Ken Youens-Clark, Jack Roddy and Travis Wheeler at the University of Arizona.
+Ken Youens-Clark, Jack Roddy, Jeb Rosen and Travis Wheeler at the University of Arizona.
 
 The tandem-array mask (`src/fastan.rs`) is a port of Gene Myers' FasTAN,
 including the wave aligner it takes from daligner (Myers 2014).  The tRNA
