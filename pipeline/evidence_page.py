@@ -2,7 +2,7 @@
 """Per-family evidence page for an ltr_library.py run: one dossier per family, built from its founding element.
 
 usage: evidence_page.py <run_dir> <genome.fa> -o evidence.html [--families SEL] [--reference LIB]
-                        [--mask OUT] [--standard OUT] [--other NAME=OUT] [--title T] [--threads N]
+                        [--mask OUT] [--standard OUT] [--other NAME=OUT] [--title T] [--name N] [--threads N]
 
 For each family (library.fa / families.tsv) the founding element (the origin of its first internal model,
 else of its first LTR model) is drawn as in a genome browser: LTRs, assembly gaps, TSD, primer binding site
@@ -163,7 +163,8 @@ def main():
     ap.add_argument('--families', default='all'); ap.add_argument('--reference'); ap.add_argument('--mask')
     ap.add_argument('--standard'); ap.add_argument('--other', help='NAME=mask.out')
     ap.add_argument('--title'); ap.add_argument('--threads', type=int, default=8)
-    ap.add_argument('--domain-hmm', default=os.environ.get('HMM', '/usr/local/LTR_retriever-2.9.0/database/TEfam.hmm'))
+    ap.add_argument('--name', help='the run name in the page header (default: the run directory\'s name)')
+    ap.add_argument('--domain-hmm', default=os.environ.get('HMM', os.path.join(HERE, '..', 'data', 'TEdomains.hmm')))
     ap.add_argument('--work', help='scratch directory (default: <run>/evidence)')
     ap.add_argument('--rmblastn', default=os.environ.get('RMBLASTN', 'rmblastn'), help='the Rust rmblastn')
     ap.add_argument('--nail', default=os.environ.get('NAIL', 'nail'))
@@ -458,7 +459,8 @@ def main():
         if x.get('keep') != '1': continue
         n_elem += 1
         if x.get('pbs_trna', '.') not in ('.', ''): pbs_use[x['pbs_trna']] += 1
-    meta = {'title': a.title or f'LTR family evidence: {os.path.basename(R)}', 'run': os.path.basename(R),
+    name = a.name or os.path.basename(R)
+    meta = {'title': a.title or f'LTR family evidence: {name}', 'run': name,
             'genome': os.path.basename(a.genome), 'families_total': len(models), 'shown': len(cases), 'selection': a.families,
             'reference': os.path.basename(a.reference) if a.reference else None, 'totals': totals,
             'pbs': {'elements': n_elem, 'with_pbs': sum(pbs_use.values()), 'top': pbs_use.most_common(8)}}

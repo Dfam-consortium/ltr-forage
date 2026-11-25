@@ -741,6 +741,7 @@ class Run:
         a = self.a
         self.sh([sys.executable, os.path.join(HERE, 'evidence_page.py'), self.out, self.genome, '-o', 'evidence.html',
                  '--domain-hmm', a.domain_hmm, '--threads', a.threads, '--work', 'evidence',
+                 '--name', os.path.basename(os.path.normpath(os.path.abspath(self.top))),
                  '--rmblastn', a.rmblastn, '--nail', a.nail, '--mmseqs', a.mmseqs,
                  *(['--reference', os.path.abspath(a.evidence_reference)] if a.evidence_reference else [])],
                 'evidence.log', stdout='evidence.txt')

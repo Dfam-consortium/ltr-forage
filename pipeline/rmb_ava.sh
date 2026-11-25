@@ -3,7 +3,7 @@
 # recipe scripts read (drop-in for blastn -task dc-megablast -outfmt "6 <fields>").
 # usage: rmb_ava.sh <query.fa> <db.fa> <max_hsps> <out.tsv> <fields...>
 #   fields: any of qseqid sseqid pident length qstart qend sstart send qlen slen bitscore
-# Env: THREADS (32), RMBLASTN (the Rust rmblastn; default /usr/local/rmblast/bin/rmblastn), WORD (seed word size, 12; 9-16 give the same 80-80 pairs and scores, see runs/aligner_rmb_word), MATRIX (default 20p<GC>g for the db's GC, pick_matrix.sh),
+# Env: THREADS (32), RMBLASTN (the Rust rmblastn; default: rmblastn on PATH), WORD (seed word size, 12; 9-16 give the same 80-80 pairs and scores, see runs/aligner_rmb_word), MATRIX (default 20p<GC>g for the db's GC, pick_matrix.sh),
 #      CHUNK (2000 queries per rmblastn call: --mt-mode 1 holds a call's results in memory until it ends),
 #      MT_MODE (1: split by queries, streamed in input order, the default; rmblastn 3.0.10's --mt-mode 1 can
 #      deadlock, use 3.0.9 or >= 3.0.11, or MT_MODE=0), MIN_PID (drop hits below this pident).
@@ -16,7 +16,7 @@ set -eo pipefail
 Q=$1; DB=$2; MAXH=$3; OUT=$4; shift 4
 # nothing to search (e.g. no multi-element clusters for the flank filter): no hits
 if ! grep -q "^>" "$Q" || ! grep -q "^>" "$DB"; then : > "$OUT"; : > "$OUT.log"; exit 0; fi
-RMB=${RMBLASTN:-/usr/local/rmblast/bin/rmblastn}   # the installed release; never a development checkout, which a rebuild swaps mid-run
+RMB=${RMBLASTN:-rmblastn}   # ltr_library.py always sets RMBLASTN
 MATRIX=${MATRIX:-$(bash "$(dirname "$0")/pick_matrix.sh" "$DB")}
 CH=$(mktemp -d "$OUT.chunks.XXXX"); trap 'rm -rf "$CH"' EXIT   # also when a chunk's search fails
 # time and peak memory per chunk go to the log where GNU time is installed

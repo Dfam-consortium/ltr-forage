@@ -5,13 +5,13 @@
 # word 9, gap 24/6, X-drops 450/112/225, minscore 225; matrix = 20p<GC>g for the genome's GC),
 # except that the port applies mask level 80 itself instead of RepeatMasker's 101 + Perl filter; split into
 # BATCHES query batches run in parallel, against the current library; then excise by hit depth.
-# Env: RMBLASTN (the Rust rmblastn; default /usr/local/rmblast/bin/rmblastn), BATCHES (16), FILTER_JOBS (mask-level filters at a time, 4), THREADS per batch (4; BATCHES x THREADS = cores, as RepeatMasker -pa 16), ROUND1_HITS (reuse for round 1; round 2 then searches the whole library), INCREMENTAL (1), REMAP (0; see below), PREV_RUN (see below), DEPTH_WORD (seed word size, 9 as RepeatMasker).
+# Env: RMBLASTN (the Rust rmblastn; default: rmblastn on PATH), BATCHES (16), FILTER_JOBS (mask-level filters at a time, 4), THREADS per batch (4; BATCHES x THREADS = cores, as RepeatMasker -pa 16), ROUND1_HITS (reuse for round 1; round 2 then searches the whole library), INCREMENTAL (1), REMAP (0; see below), PREV_RUN (see below), DEPTH_WORD (seed word size, 9 as RepeatMasker).
 set -euo pipefail
 lib=$1; sample=$2; out=$3; rounds=$4; scale=$5; matrix=$6; shift 6
 HERE=$(cd "$(dirname "$0")" && pwd)
 # default: the installed release, never a development checkout, which a rebuild swaps mid-run
 # (ltr_library.py always sets RMBLASTN)
-RMB=${RMBLASTN:-/usr/local/rmblast/bin/rmblastn}
+RMB=${RMBLASTN:-rmblastn}   # ltr_library.py always sets RMBLASTN
 B=${BATCHES:-16}; T=${THREADS:-4}
 # a failed batch ends the script: stop the batches still running with it
 trap 'p=$(jobs -p); [ -z "$p" ] || kill $p 2>/dev/null || true' EXIT
