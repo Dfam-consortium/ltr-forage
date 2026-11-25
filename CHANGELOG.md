@@ -3,7 +3,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased
+## 0.2.0 2026-11-25
 ### Changed
 - sufr 0.8.0: ltr-forage reads its index format (version 7) through libsufr
   0.8.0's API, and no longer reads indexes made by sufr 0.7 or older; rebuild
